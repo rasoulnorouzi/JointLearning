@@ -1,3 +1,4 @@
+# %%
 import torch
 from torch.utils.data import Dataset
 from transformers import AutoTokenizer
@@ -336,6 +337,8 @@ def generate_full_report(csv_path="train.csv", tokenizer_name="google-bert/bert-
     Generates a detailed report for a specified number of *random* samples from the dataset,
     ensuring at least one sample demonstrating CE tagging is included.
     """
+    random.seed(8642) # Set the random seed
+    
     try:
         df = pd.read_csv(csv_path)
         print(f"Successfully loaded {csv_path}. Total rows: {len(df)}\n")
@@ -476,3 +479,4 @@ if __name__ == '__main__':
         num_samples_to_report=NUMBER_OF_SAMPLES_FOR_DETAILED_REPORT,
         negative_rel_rate_for_report=NEGATIVE_SAMPLING_RATE_IN_REPORT
     )
+# %%
