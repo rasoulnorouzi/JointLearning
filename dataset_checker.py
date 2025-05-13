@@ -7,7 +7,7 @@ import torch
 
 # --- generate_full_report function ---
 def generate_full_report(csv_path="train.csv", tokenizer_name="google-bert/bert-base-uncased", 
-                         max_length_truncate=256, num_samples_to_report=15, negative_rel_rate_for_report=2.0): # Increased rate
+                         max_length_truncate=256, num_samples_to_report=15, negative_rel_rate_for_report=3.0): # Increased rate
     random.seed(8643) 
     try:
         df = pd.read_csv(csv_path)
@@ -103,7 +103,7 @@ def generate_full_report(csv_path="train.csv", tokenizer_name="google-bert/bert-
         collate_test_batch_indices = final_indices_to_report[:min(4, len(final_indices_to_report))]
         collate_test_batch = [full_dataset_instance[i] for i in collate_test_batch_indices]
         print(f"Testing collator with {len(collate_test_batch)} samples (iloc indices: {collate_test_batch_indices}).")
-        
+
         collator_instance = CausalDatasetCollator(
             tokenizer=full_dataset_instance.tokenizer,
             num_rel_labels_model_expects=len(id2label_rel) # Use actual number of defined relation labels

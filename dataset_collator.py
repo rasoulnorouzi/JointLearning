@@ -1,14 +1,14 @@
 # %%
 import torch
-from torch.utils.data import Dataset, DataLoader # Added DataLoader for testing collate_fn
+from torch.utils.data import Dataset, DataLoader
 from transformers import AutoTokenizer
 import json
 import pandas as pd
 import random
 import re # For checking punctuation in random spans
-from functools import partial # For using collate_fn with DataLoader
+from functools import partial
 
-# --- Configuration & Label Mappings ---
+# --- Configuration & Label Mappings --- (Assuming these are defined globally or passed appropriately)
 id2label_span = {0: "B-C", 1: "I-C", 2: "B-E", 3: "I-E", 4: "B-CE", 5: "I-CE", 6: "O"}
 label2id_span = {v: k for k, v in id2label_span.items()}
 entity_label_to_bio_prefix = {"cause": "C", "effect": "E", "internal_CE": "CE", "non-causal": "O"}
@@ -28,16 +28,18 @@ class CausalDataset(Dataset):
     PyTorch Dataset class for processing causal text data.
     __getitem__ returns UNPADDED sequences. Padding is handled by the collate function.
     """
-    def __init__(self, dataframe, tokenizer_name, max_length=512, negative_relation_rate=1.0):
+    def __init__(self, dataframe, tokenizer_name, max_length=512, negative_relation_rate=1.0, 
+                 max_random_span_len=5): # Added max_random_span_len parameter
         self.dataframe = dataframe.copy()
         self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
         self.max_length = max_length # Max length for TRUNCATION
         self.negative_relation_rate = negative_relation_rate
+        self.max_random_span_len = max_random_span_len # Store the new parameter
 
         def safe_json_loads(data_str):
             try:
                 if isinstance(data_str, str): return json.loads(data_str.replace("'", "\""))
-                return [] 
+                return []
             except: return []
         self.dataframe.loc[:, 'entities_parsed'] = self.dataframe['entities'].apply(safe_json_loads)
         self.dataframe.loc[:, 'relations_parsed'] = self.dataframe['relations'].apply(safe_json_loads)
@@ -59,13 +61,12 @@ class CausalDataset(Dataset):
     def _is_span_valid_for_random_neg_sampling(self, span_coords, tokens_list, word_ids_list_for_span_check, unique_candidate_arg_spans):
         s_start, s_end = span_coords
         if not (0 <= s_start <= s_end < len(tokens_list)): return False
-        if s_start > s_end : return False
         if any(check_span_overlap_util(span_coords, gold_span) for gold_span in unique_candidate_arg_spans):
             return False
-        current_span_tokens = tokens_list[s_start : s_end + 1]
         current_span_word_ids = [word_ids_list_for_span_check[i] for i in range(s_start, s_end + 1) if i < len(word_ids_list_for_span_check)]
-        if not any(wid is not None for wid in current_span_word_ids): return False
-        span_text = self.tokenizer.convert_tokens_to_string(current_span_tokens).strip()
+        if not current_span_word_ids or any(wid is None for wid in current_span_word_ids):
+            return False
+        span_text = self.tokenizer.convert_tokens_to_string(tokens_list[s_start : s_end + 1]).strip()
         if not span_text: return False
         if re.fullmatch(r'[\W_]+', span_text): return False
         return True
@@ -76,29 +77,27 @@ class CausalDataset(Dataset):
         raw_entities_data = row.get('entities_parsed', [])
         relations_data = row.get('relations_parsed', [])
 
-        # Tokenize: NO PADDING in __getitem__, only truncation.
         tokenized_output = self.tokenizer(
             text, max_length=self.max_length, padding=False, truncation=True,
             return_offsets_mapping=True, return_attention_mask=True
         )
         input_ids_list = tokenized_output['input_ids']
-        attention_mask_list = tokenized_output['attention_mask'] # Unpadded
+        attention_mask_list = tokenized_output['attention_mask']
         offset_mapping = tokenized_output['offset_mapping']
         word_ids_list = tokenized_output.word_ids()
 
-        # --- Entity Preprocessing ---
         entities_with_word_spans = []
         for entity in raw_entities_data:
             if not (isinstance(entity, dict) and all(k in entity for k in ['start_offset', 'end_offset', 'id', 'label'])): continue
             word_indices_set = self._get_word_indices_for_entity(entity['start_offset'], entity['end_offset'], offset_mapping, word_ids_list)
             if word_indices_set: entities_with_word_spans.append({**entity, 'word_indices': word_indices_set})
-        
+
         word_span_to_entities = {}
         for entity in entities_with_word_spans:
             key = entity['word_indices']
             if key not in word_span_to_entities: word_span_to_entities[key] = []
             word_span_to_entities[key].append(entity)
-        
+
         temp_bio_entities, processed_original_ids_for_bio = [], set()
         for word_indices_key, entities_in_word_span in word_span_to_entities.items():
             if not word_indices_key: continue
@@ -119,7 +118,7 @@ class CausalDataset(Dataset):
                 for e in entities_in_word_span:
                     if e['id'] not in processed_original_ids_for_bio:
                         temp_bio_entities.append(e); processed_original_ids_for_bio.add(e['id'])
-        
+
         is_causal_sentence = 0; final_bio_entities = []
         if any(e.get('label') in ['cause', 'effect', 'internal_CE'] for e in temp_bio_entities):
             is_causal_sentence = 1
@@ -128,7 +127,6 @@ class CausalDataset(Dataset):
              is_causal_sentence = 0
              final_bio_entities = [e for e in temp_bio_entities if e.get('label') == 'non-causal']
 
-        # --- BIO Tagging (for unpadded sequence) ---
         current_sequence_length = len(input_ids_list)
         bio_labels_list = [label2id_span["O"]] * current_sequence_length
         entity_spans_for_relations = {}
@@ -144,15 +142,16 @@ class CausalDataset(Dataset):
                     if offset_s < end_char and start_char < offset_e:
                         if token_start == -1: token_start = i
                         token_end = i
-                if token_start != -1:
-                    current_token_end = token_start
-                    for i in range(token_start, len(offset_mapping)):
-                        offset_s, offset_e = offset_mapping[i]
-                        if offset_s == offset_e and offset_s == 0 and (i >= len(word_ids_list) or word_ids_list[i] is None): continue
-                        if offset_s < end_char and offset_e > start_char : current_token_end = i
-                        else:
-                            if offset_s >= end_char : break 
-                    token_end = current_token_end
+                if token_start != -1 :
+                    current_token_end_refined = token_start
+                    for i_ref in range(token_start, len(offset_mapping)):
+                        offset_s_ref, offset_e_ref = offset_mapping[i_ref]
+                        if offset_s_ref == offset_e_ref and offset_s_ref == 0 and (i_ref >= len(word_ids_list) or word_ids_list[i_ref] is None): continue
+                        if offset_s_ref < end_char and offset_e_ref > start_char :
+                            current_token_end_refined = i_ref
+                        elif offset_s_ref >= end_char :
+                            break
+                    token_end = current_token_end_refined
                 if token_start != -1 and token_end != -1 and token_start <= token_end:
                     bio_prefix = entity_label_to_bio_prefix.get(entity_label_str)
                     if bio_prefix:
@@ -164,14 +163,13 @@ class CausalDataset(Dataset):
                     if 'original_ids' in entity_to_tag:
                         for orig_id in entity_to_tag['original_ids']: entity_spans_for_relations[orig_id] = current_span_for_relation
                     elif 'id' in entity_to_tag: entity_spans_for_relations[entity_to_tag['id']] = current_span_for_relation
-        
+
         for i in range(current_sequence_length):
-            if i < len(word_ids_list) and word_ids_list[i] is None: bio_labels_list[i] = -100
-        
-        # --- Relation Processing ---
+            if i < len(word_ids_list) and word_ids_list[i] is None:
+                bio_labels_list[i] = -100
+
         relation_tuples = []
         if is_causal_sentence == 1:
-            # Positive relations
             if relations_data:
                 for rel in relations_data:
                     if not isinstance(rel, dict): continue
@@ -185,10 +183,9 @@ class CausalDataset(Dataset):
                                 if fbe.get('label')=='internal_CE' and from_id in fbe.get('original_ids',[]) and to_id in fbe.get('original_ids',[]):
                                     is_self_loop_from_ce = True; break
                         if not is_self_loop_from_ce: relation_tuples.append((c_span, e_span, rel_label))
-            
-            # Negative Sampling
+
             unique_candidate_arg_spans = []
-            temp_arg_spans = [] # Renamed for clarity
+            temp_arg_spans = []
             for tagged_entity in final_bio_entities:
                 if tagged_entity.get('label') in ['cause', 'effect', 'internal_CE']:
                     span_id_lookup = tagged_entity.get('original_ids', [tagged_entity.get('id')])[0]
@@ -201,14 +198,13 @@ class CausalDataset(Dataset):
             num_negative_to_generate = int(num_positive_relations * self.negative_relation_rate)
             if num_positive_relations == 0 and unique_candidate_arg_spans and self.negative_relation_rate > 0:
                  num_negative_to_generate = max(1, int(len(unique_candidate_arg_spans) * self.negative_relation_rate * 0.5))
-            
+
             generated_neg_count = 0
-            # Stage 1
             if len(unique_candidate_arg_spans) >= 2 and generated_neg_count < num_negative_to_generate:
                 potential_neg_pairs_s1 = []
                 for i_idx in range(len(unique_candidate_arg_spans)):
                     for j_idx in range(len(unique_candidate_arg_spans)):
-                        if i_idx == j_idx: continue 
+                        if i_idx == j_idx: continue
                         s1, s2 = unique_candidate_arg_spans[i_idx], unique_candidate_arg_spans[j_idx]
                         is_gold_fwd = any(c==s1 and e==s2 for c,e,l in relation_tuples if l!=NEGATIVE_SAMPLE_REL_ID)
                         is_gold_bwd = any(c==s2 and e==s1 for c,e,l in relation_tuples if l!=NEGATIVE_SAMPLE_REL_ID)
@@ -219,51 +215,56 @@ class CausalDataset(Dataset):
                 for neg_pair in potential_neg_pairs_s1:
                     if generated_neg_count >= num_negative_to_generate: break
                     relation_tuples.append(neg_pair); generated_neg_count += 1
-            
-            # Stage 2
-            if generated_neg_count < num_negative_to_generate:
-                # Use unpadded tokens and word_ids for validity checks in Stage 2
-                current_tokens_str_list = self.tokenizer.convert_ids_to_tokens(input_ids_list)
-                # word_ids_list is already for the unpadded sequence here.
 
-                attempts_s2, max_attempts_s2 = 0, (num_negative_to_generate - generated_neg_count) * 20
-                # Sub-Stage 2.1
+            if generated_neg_count < num_negative_to_generate:
+                current_tokens_str_list = self.tokenizer.convert_ids_to_tokens(input_ids_list)
+                
+                attempts_s2, max_attempts_s2 = 0, (num_negative_to_generate - generated_neg_count) * 50 
+
                 if unique_candidate_arg_spans:
-                    for _ in range(max_attempts_s2 // 2): 
+                    for _ in range(max_attempts_s2 // 2):
                         if generated_neg_count >= num_negative_to_generate or current_sequence_length <=1 : break
                         existing_arg = random.choice(unique_candidate_arg_spans)
                         if current_sequence_length <= 1: continue
                         r_s = random.randint(0, current_sequence_length - 1)
-                        r_l = random.randint(1, min(3, current_sequence_length - r_s))
+                        # Use the configurable max_random_span_len
+                        r_l = random.randint(1, min(self.max_random_span_len, current_sequence_length - r_s))
                         r_e = r_s + r_l - 1
                         if r_s > r_e: continue
                         new_rand_span = (r_s, r_e)
                         if not self._is_span_valid_for_random_neg_sampling(new_rand_span, current_tokens_str_list, word_ids_list, unique_candidate_arg_spans): continue
                         if check_span_overlap_util(existing_arg, new_rand_span): continue
-                        
                         pairs_to_try = [(existing_arg, new_rand_span, NEGATIVE_SAMPLE_REL_ID), (new_rand_span, existing_arg, NEGATIVE_SAMPLE_REL_ID)]
                         random.shuffle(pairs_to_try)
+                        added_in_this_iteration_s2_1 = False
                         for s1_r, s2_r, rel_r in pairs_to_try:
                             if generated_neg_count >= num_negative_to_generate: break
                             is_g = any((c==s1_r and e==s2_r)or(c==s2_r and e==s1_r) for c,e,l in relation_tuples if l!=NEGATIVE_SAMPLE_REL_ID)
                             is_a = any(c==s1_r and e==s2_r and l==NEGATIVE_SAMPLE_REL_ID for c,e,l in relation_tuples)
-                            if not is_g and not is_a: relation_tuples.append((s1_r,s2_r,rel_r)); generated_neg_count+=1; break
-                # Sub-Stage 2.2
+                            if not is_g and not is_a:
+                                relation_tuples.append((s1_r,s2_r,rel_r)); generated_neg_count+=1; added_in_this_iteration_s2_1=True; break
+                        if added_in_this_iteration_s2_1 and generated_neg_count >= num_negative_to_generate: break
+
+
                 while generated_neg_count < num_negative_to_generate and attempts_s2 < max_attempts_s2 and current_sequence_length > 1 :
                     attempts_s2 +=1
                     if current_sequence_length <=1 : break
                     s1_s = random.randint(0, current_sequence_length - 1)
-                    s1_l = random.randint(1, min(3, current_sequence_length - s1_s))
+                    # Use the configurable max_random_span_len
+                    s1_l = random.randint(1, min(self.max_random_span_len, current_sequence_length - s1_s))
                     s1_e = s1_s + s1_l - 1;
                     if s1_s > s1_e: continue
                     sp1_r = (s1_s, s1_e)
                     if not self._is_span_valid_for_random_neg_sampling(sp1_r, current_tokens_str_list, word_ids_list, unique_candidate_arg_spans): continue
+                    
                     s2_s = random.randint(0, current_sequence_length - 1)
-                    s2_l = random.randint(1, min(3, current_sequence_length - s2_s))
+                    # Use the configurable max_random_span_len
+                    s2_l = random.randint(1, min(self.max_random_span_len, current_sequence_length - s2_s))
                     s2_e = s2_s + s2_l - 1
                     if s2_s > s2_e: continue
                     sp2_r = (s2_s, s2_e)
                     if not self._is_span_valid_for_random_neg_sampling(sp2_r, current_tokens_str_list, word_ids_list, unique_candidate_arg_spans): continue
+                    
                     if sp1_r == sp2_r or check_span_overlap_util(sp1_r, sp2_r): continue
                     is_g = any((c==sp1_r and e==sp2_r)or(c==sp2_r and e==sp1_r) for c,e,l in relation_tuples if l!=NEGATIVE_SAMPLE_REL_ID)
                     if is_g: continue
@@ -274,7 +275,8 @@ class CausalDataset(Dataset):
             "bio_labels": bio_labels_list, "cls_label": is_causal_sentence,
             "relation_tuples": relation_tuples, "text": text,
             "tokenized_tokens": self.tokenizer.convert_ids_to_tokens(input_ids_list),
-            "original_entities_data": raw_entities_data, "final_bio_entities": final_bio_entities,
+            "original_entities_data": raw_entities_data,
+            "final_bio_entities": final_bio_entities,
             "original_relations_data": relations_data
         }
 
@@ -306,20 +308,7 @@ class CausalDatasetCollator:
         pair_idx, c_starts, c_ends, e_starts, e_ends, rel_labs = [], [], [], [], [], []
         for i, rel_tuples_sample in enumerate(relation_tuples_batch):
             if rel_tuples_sample:
-                for (cs, ce, rel_id) in rel_tuples_sample: # Corrected tuple unpacking
-                    # Assuming rel_tuples_sample contains ((c_start,c_end), (e_start,e_end), rel_id)
-                    c_span, e_span = cs, ce # If cs is already (start,end)
-                    # If cs is not a span but part of a larger tuple, adjust unpacking:
-                    # e.g. if cs = ((c_start, c_end), (e_start, e_end)) and ce = rel_id
-                    # Then: c_span, e_span = cs[0], cs[1]
-                    #     rel_label_id = ce
-                    # Based on your CausalDataset, it's: ((c_s,c_e), (e_s,e_e), rel_id)
-                    # So the loop should be: for (c_span_tuple, e_span_tuple, rel_label_id) in rel_tuples_sample:
-                    # And then: c_s, c_e = c_span_tuple; e_s, e_e = e_span_tuple
-                    # The current code: for (c_span, e_span, rel_label_id) in rel_tuples_for_sample:
-                    # implies c_span is (start,end), e_span is (start,end)
-                    
-                    # Assuming c_span and e_span are already (start, end) tuples:
+                for (c_span, e_span, rel_id) in rel_tuples_sample:
                     if rel_id >= self.num_rel_labels_model_expects:
                         rel_id = NEGATIVE_SAMPLE_REL_ID
                         if rel_id >= self.num_rel_labels_model_expects: continue
