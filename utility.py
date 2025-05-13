@@ -1,0 +1,132 @@
+import numpy as np
+import torch
+from collections import Counter # Not strictly needed with np.bincount but good for context
+
+def compute_class_weights(
+    labels_list,
+    num_classes: int,
+    technique: str = 'inverse_frequency',
+    ignore_index: int = None,
+    beta: float = 0.999, # For ENS
+    smoothing_epsilon: float = 1e-9 # To prevent division by zero
+):
+    """
+    Computes class weights for imbalanced datasets based on various techniques.
+    These weights can be passed to loss functions like `torch.nn.CrossEntropyLoss`.
+
+    Args:
+        labels_list (list, np.ndarray, or torch.Tensor):
+            A 1D iterable containing all observed class labels for a specific task
+            from the dataset (e.g., [0, 1, 1, 0, 2, ...]).
+            For BIO, this should be a flattened list of token labels.
+        num_classes (int): The total number of unique classes for this task (e.g., if classes are 0, 1, 2, then num_classes=3).
+        technique (str, optional): The weighting technique. Options:
+            - 'inverse_count': Weights are 1.0 / (count[c] + epsilon). Less aggressive than inverse_frequency.
+            - 'inverse_frequency': Weights are total_valid_labels / (count[c] + epsilon).
+                                   This gives significantly higher weights to rarer classes.
+            - 'median_frequency': Weights are median_class_frequency / (frequency[c] + epsilon).
+                                  Balances based on the median frequency.
+            - 'ens': Effective Number of Samples weighting (Cui et al., 2019).
+                     Weights are 1.0 / (E_nc + epsilon), where E_nc is the effective number of samples for class c.
+            Defaults to 'inverse_frequency'.
+        ignore_index (int, optional): A label value to ignore during frequency counting (e.g., -100 for padding/special tokens).
+            Defaults to None.
+        beta (float, optional): Hyperparameter for the 'ens' technique. Must be in [0, 1).
+            Controls how quickly the effective number of samples plateaus. Defaults to 0.999.
+        smoothing_epsilon (float, optional): A small epsilon added to denominators
+            to prevent division by zero for unobserved or very rare classes.
+            Defaults to 1e-9.
+
+    Returns:
+        torch.Tensor: A 1D tensor of length `num_classes` containing the calculated weights.
+                      Returns a tensor of ones if labels_list is empty or no valid labels found after filtering.
+    """
+    if not isinstance(labels_list, (list, np.ndarray, torch.Tensor)):
+        raise TypeError("labels_list must be a list, NumPy array, or PyTorch tensor.")
+    if not isinstance(num_classes, int) or num_classes <= 0:
+        raise ValueError("num_classes must be a positive integer.")
+
+    if isinstance(labels_list, list):
+        labels_array = np.array(labels_list, dtype=int)
+    elif isinstance(labels_list, torch.Tensor):
+        labels_array = labels_list.cpu().numpy().astype(int)
+    else: # np.ndarray
+        labels_array = labels_list.astype(int)
+
+    # Filter out ignore_index
+    if ignore_index is not None:
+        labels_array = labels_array[labels_array != ignore_index]
+
+    if labels_array.size == 0:
+        # print(f"Warning: No valid labels found (possibly all were ignore_index or list was empty). Returning uniform weights for {num_classes} classes.")
+        return torch.ones(num_classes, dtype=torch.float32)
+
+    # Filter out labels that are out of the expected range [0, num_classes-1]
+    # This ensures np.bincount works correctly and handles unexpected label values.
+    valid_mask = (labels_array >= 0) & (labels_array < num_classes)
+    # if not np.all(valid_mask): # More thorough check if all original labels were supposed to be in range
+    #     out_of_range_labels = labels_array[~valid_mask]
+    #     print(f"Warning: Labels found outside the range [0, {num_classes-1}]: {np.unique(out_of_range_labels)}. These will be ignored for weight calculation.")
+    labels_array = labels_array[valid_mask]
+    
+    if labels_array.size == 0:
+        # print(f"Warning: No valid labels found after filtering out-of-range ones. Returning uniform weights for {num_classes} classes.")
+        return torch.ones(num_classes, dtype=torch.float32)
+
+    # Calculate class counts
+    counts = np.bincount(labels_array, minlength=num_classes)
+    
+    weights = np.ones(num_classes, dtype=np.float32) # Default for safety
+
+    if technique == 'inverse_count':
+        # Weight is inversely proportional to the raw count of the class.
+        weights = 1.0 / (counts + smoothing_epsilon)
+
+    elif technique == 'inverse_frequency':
+        total_valid_labels = np.sum(counts)
+        # Weight is total samples / count for class c. Rarer classes get higher weights.
+        for c in range(num_classes):
+            weights[c] = total_valid_labels / (counts[c] + smoothing_epsilon)
+
+    elif technique == 'median_frequency':
+        total_valid_labels = np.sum(counts)
+        if total_valid_labels > 0:
+            # Calculate frequencies only for classes that actually appear
+            observed_class_indices = np.where(counts > 0)[0]
+            if len(observed_class_indices) > 0:
+                class_frequencies = counts[observed_class_indices] / total_valid_labels
+                median_freq = np.median(class_frequencies)
+                
+                for c in range(num_classes):
+                    if counts[c] > 0:
+                        weights[c] = median_freq / ((counts[c] / total_valid_labels) + smoothing_epsilon)
+                    else:
+                        # For unobserved classes, assign a high weight (median_freq / epsilon)
+                        # This represents extreme rarity.
+                        weights[c] = median_freq / smoothing_epsilon
+            # else: all counts are 0, already handled by labels_array.size == 0 check
+        # else: all counts are 0, already handled
+
+    elif technique == 'ens': # Effective Number of Samples
+        if not (0 <= beta < 1):
+            raise ValueError("beta for ENS must be in [0, 1).")
+        
+        for c in range(num_classes):
+            n_c = counts[c]
+            # Effective number E_nc = (1 - beta^n_c) / (1-beta)
+            # If n_c = 0, E_nc = 0. Weight = 1 / (E_nc + epsilon) -> high weight
+            # If beta = 0, E_nc = 1 (for n_c > 0), or 0 (for n_c = 0)
+            if beta == 0.0: # Avoids 0/0 if n_c is also 0, though beta**0 = 1
+                effective_num_c = 1.0 if n_c > 0 else 0.0
+            else:
+                effective_num_c = (1.0 - beta**n_c) / (1.0 - beta)
+            weights[c] = 1.0 / (effective_num_c + smoothing_epsilon)
+    else:
+        raise ValueError(f"Unknown weighting technique: {technique}. "
+                         "Options: 'inverse_count', 'inverse_frequency', 'median_frequency', 'ens'.")
+
+    # PyTorch CrossEntropyLoss weights do not need to be normalized to sum to 1 or N.
+    # The loss is internally computed as: loss(x, class) = weight[class] * (-x[class] + log(sum_j exp(x_j)))
+    # So, the absolute scale of weights matters.
+    
+    return torch.tensor(weights, dtype=torch.float32)

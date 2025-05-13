@@ -91,39 +91,30 @@ class JointCausalModel(nn.Module):
                     if layer.bias is not None:
                         nn.init.zeros_(layer.bias)
     
-    def forward(self, input_dict):
+    def forward(self, input_ids, attention_mask, pair_batch=None, cause_starts=None, 
+                cause_ends=None, effect_starts=None, effect_ends=None):
         """Forward pass of the model.
 
-            Args:
-                input_dict: Dictionary containing:
-                    - input_ids: Input token IDs (batch_size, seq_len)
-                    - attention_mask: Attention mask (batch_size, seq_len)
-                    # pair_batch: A 1D tensor of integer indices. Each index maps a
-                    #             candidate relation pair (defined by corresponding `cause_starts`,
-                    #             `cause_ends`, `effect_starts`, `effect_ends` at the same
-                    #             position in their respective tensors) to its original sentence
-                    #             within the input batch (e.g., `input_ids`).
-                    #             For instance, if `pair_batch[i] = k`, it means the i-th
-                    #             candidate relation pair's text comes from the k-th sentence
-                    #             in the original batch (`input_ids[k]`).
-                    #             This tensor is crucial for selecting the correct encoder hidden
-                    #             states (`enc_out`) for each specific pair, effectively
-                    #             creating a new "batch of pairs" (where the first dimension
-                    #             corresponds to pairs) for the relation prediction head.
-                    #             The length of `pair_batch` is the total number of candidate
-                    #             relation pairs being processed across all sentences in the
-                    #             original batch.
-                    #             Shape: (total_num_pairs_in_batch,)
-                    - pair_batch: Batch indices for relation pairs
-                    - cause_starts: Start indices for cause spans, aligned with `pair_batch`. (total_num_pairs_in_batch,)
-                    - cause_ends: End indices for cause spans, aligned with `pair_batch`. (total_num_pairs_in_batch,)
-                    - effect_starts: Start indices for effect spans, aligned with `pair_batch`. (total_num_pairs_in_batch,)
-                    - effect_ends: End indices for effect spans, aligned with `pair_batch`. (total_num_pairs_in_batch,)
+        Args:
+            input_ids: Input token IDs (batch_size, seq_len)
+            attention_mask: Attention mask (batch_size, seq_len)
+            pair_batch: Batch indices for relation pairs. Each index maps a candidate relation pair
+                       to its original sentence within the input batch. Shape: (total_num_pairs_in_batch,)
+            cause_starts: Start indices for cause spans. Shape: (total_num_pairs_in_batch,)
+            cause_ends: End indices for cause spans. Shape: (total_num_pairs_in_batch,)
+            effect_starts: Start indices for effect spans. Shape: (total_num_pairs_in_batch,)
+            effect_ends: End indices for effect spans. Shape: (total_num_pairs_in_batch,)
+            
+        Returns:
+            tuple: (cls_logits, span_logits, rel_logits)
+                - cls_logits: Classification logits (batch_size, num_cls_labels)
+                - span_logits: Span prediction logits (batch_size, seq_len, num_span_labels)
+                - rel_logits: Relation prediction logits (total_num_pairs_in_batch, num_rel_labels) or None
         """
         # Get encoder outputs
         enc_out = self.enc(
-            input_ids=input_dict["input_ids"],
-            attention_mask=input_dict["attention_mask"]
+            input_ids=input_ids,
+            attention_mask=attention_mask
         ).last_hidden_state
         
         # Apply dropout and layer normalization
@@ -138,14 +129,7 @@ class JointCausalModel(nn.Module):
         
         # Task 3: Relation prediction
         rel_logits = None
-        if "pair_batch" in input_dict and input_dict["pair_batch"] is not None:
-            # Get cause and effect vectors
-            pair_batch = input_dict["pair_batch"]
-            cause_starts = input_dict["cause_starts"]
-            cause_ends = input_dict["cause_ends"]
-            effect_starts = input_dict["effect_starts"]
-            effect_ends = input_dict["effect_ends"]
-            
+        if pair_batch is not None:
             # Get span representations
             span_states = enc_out[pair_batch]  # select per-pair batch rows
             N, T, H = span_states.size()
