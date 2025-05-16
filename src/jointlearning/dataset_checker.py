@@ -1,6 +1,7 @@
 # %%
 import random
-from dataset_collator import CausalDatasetCollator, CausalDataset, id2label_bio, id2label_rel, NEGATIVE_SAMPLE_REL_ID
+from src.jointlearning.dataset_collator import CausalDatasetCollator, CausalDataset
+from src.jointlearning.config import id2label_bio, id2label_rel, NEGATIVE_SAMPLE_REL_ID
 import pandas as pd
 import torch
 

@@ -6,6 +6,19 @@ import json
 import random
 import re # For checking punctuation in random spans
 
+from src.jointlearning.config import (
+    DATASET_CONFIG,
+    id2label_bio,
+    label2id_bio,
+    entity_label_to_bio_prefix,
+    id2label_rel,
+    label2id_rel,
+    id2label_cls,
+    label2id_cls,
+    POSITIVE_RELATION_TYPE_TO_ID,
+    NEGATIVE_SAMPLE_REL_ID,
+)
+
 # --- Configuration & Label Mappings --- (Assuming these are defined globally or passed appropriately)
 id2label_bio = {0: "B-C", 1: "I-C", 2: "B-E", 3: "I-E", 4: "B-CE", 5: "I-CE", 6: "O"}
 label2id_bio = {v: k for k, v in id2label_bio.items()}
@@ -31,13 +44,14 @@ class CausalDataset(Dataset):
     PyTorch Dataset class for processing causal text data.
     __getitem__ returns UNPADDED sequences. Padding is handled by the collate function.
     """
-    def __init__(self, dataframe, tokenizer_name, max_length=512, negative_relation_rate=1.0, 
-                 max_random_span_len=5): # Added max_random_span_len parameter
+    def __init__(self, dataframe, tokenizer_name, max_length=DATASET_CONFIG["max_length"], 
+                 negative_relation_rate=DATASET_CONFIG["negative_relation_rate"], 
+                 max_random_span_len=DATASET_CONFIG["max_random_span_len"]):
         self.dataframe = dataframe.copy()
         self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
-        self.max_length = max_length # Max length for TRUNCATION
+        self.max_length = max_length
         self.negative_relation_rate = negative_relation_rate
-        self.max_random_span_len = max_random_span_len # Store the new parameter
+        self.max_random_span_len = max_random_span_len
 
         def safe_json_loads(data_str):
             try:
