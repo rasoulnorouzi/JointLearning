@@ -1,6 +1,6 @@
 # %%
 import random
-from dataset_collator import CausalDatasetCollator, CausalDataset, id2label_span, id2label_rel, NEGATIVE_SAMPLE_REL_ID
+from dataset_collator import CausalDatasetCollator, CausalDataset, id2label_bio, id2label_rel, NEGATIVE_SAMPLE_REL_ID
 import pandas as pd
 import torch
 
@@ -8,7 +8,7 @@ import torch
 # --- generate_full_report function ---
 def generate_full_report(csv_path="train.csv", tokenizer_name="google-bert/bert-base-uncased", 
                          max_length_truncate=256, num_samples_to_report=15, negative_rel_rate_for_report=3.0): # Increased rate
-    random.seed(8643) 
+    random.seed(8642) 
     try:
         df = pd.read_csv(csv_path)
         print(f"Successfully loaded {csv_path}. Total rows: {len(df)}\n")
@@ -78,7 +78,7 @@ def generate_full_report(csv_path="train.csv", tokenizer_name="google-bert/bert-
         print(f"  {'Token':<20} | {'BIO Label':<10} (ID) | Word ID")
         print(f"  {'-'*20}-+-{'-'*10}------+-{'-'*7}")
         for token_idx, (token_str, bio_id_val) in enumerate(zip(tokens, bio_labels_list)):
-            bio_tag_str = id2label_span.get(bio_id_val, f"RAW({bio_id_val})")
+            bio_tag_str = id2label_bio.get(bio_id_val, f"RAW({bio_id_val})")
             word_id_for_token = report_word_ids_unpadded[token_idx] if token_idx < len(report_word_ids_unpadded) else "N/A"
             if bio_id_val == -100: print(f"  {token_str:<20} | IGNORED    ({bio_id_val:<3}) | {str(word_id_for_token):<7}")
             else: print(f"  {token_str:<20} | {bio_tag_str:<10} ({bio_id_val:<3}) | {str(word_id_for_token):<7}")
@@ -127,7 +127,7 @@ def generate_full_report(csv_path="train.csv", tokenizer_name="google-bert/bert-
     print("\n========================= END OF COLLATE FUNCTION TEST =========================")
 
 if __name__ == '__main__':
-    NUMBER_OF_SAMPLES_FOR_DETAILED_REPORT = 15
+    NUMBER_OF_SAMPLES_FOR_DETAILED_REPORT = 40
     NEGATIVE_SAMPLING_RATE_IN_REPORT = 2.0 # Increased to see more negatives
     MAX_LEN_FOR_DATASET_TRUNCATION = 256 
 
