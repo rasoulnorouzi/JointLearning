@@ -1,39 +1,30 @@
-# JointLearning
-JointLearning
+## Project Structure
 
-
+```
 JointLearning/
 ├── README.md
 ├── requirements.txt
-│
-├── data/
-│   ├── raw/
-│   └── processed/
-│
-├── src/
+├── .gitignore
+|
+├── datasets/                # (git-ignored) raw & processed data
+│   └── …
+|
+├── src/                     # Core library (pip-installable)
 │   └── jointlearning/
-│       ├── loader.py
-│       ├── preprocess.py
-│       ├── model.py
-│       ├── inference.py
-│       ├── rules.py
-│       ├── eval.py
-│       └── utils.py
-│
-├── hf/                          # Hugging Face integrations
-│   ├── __init__.py
-│   ├── hf_config.py            # load & manage HF configs
-│   ├── hf_model.py             # AutoModel-based model wrappers
-│   └── hf_pipeline.py          # Pipeline API wrappers
-│
-├── scripts/
-│   ├── train.py
-│   ├── hf_train.py             # optional: HF-specific training
-│   ├── infer.py
-│   ├── hf_infer.py             # uses hf_pipeline
-│   └── compute_agreement.py
-│
-└── analysis/
-    ├── agreement.ipynb
-    ├── eda.ipynb
-    └── error_analysis.ipynb
+│       ├── __init__.py
+│       ├── dataset.py       # Data loading & preprocessing
+│       ├── collator.py      # Batch collation & padding
+│       ├── model.py         # Model definition & post-processing rules
+│       ├── evaluation.py    # Metrics & annotator-agreement
+│       ├── training.py      # Training loops & checkpoints
+│       └── utils.py         # Helpers (logging, config)
+|
+├── scripts/                 # CLI tools
+│   ├── train.py             # `python scripts/train.py --config config.yaml`
+│   ├── infer.py             # Load model + predict
+│   ├── evaluate.py          # Evaluate on held-out set
+│   └── agreement.py         # Compute annotator agreement
+|
+└── analysis/                # (optional) Jupyter notebooks for EDA & error analyses
+    └── …
+```
