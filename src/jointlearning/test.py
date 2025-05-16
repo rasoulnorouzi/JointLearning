@@ -10,8 +10,11 @@ from sklearn.metrics import classification_report
 # %%
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # %%
-train_df = pd.read_csv("datasets/train.csv")
-val_df = pd.read_csv("datasets/val.csv")
+train_path = "C:\\Users\\norouzin\\Desktop\\JointLearning\\datasets\\expert_multi_task_data\\train.csv"
+val_path = "C:\\Users\\norouzin\\Desktop\\JointLearning\\datasets\\expert_multi_task_data\\val.csv"
+
+train_df = pd.read_csv(train_path)
+val_df = pd.read_csv(val_path)
 # %%
 checkpoint = "google-bert/bert-base-uncased"
 max_length_truncate=256
