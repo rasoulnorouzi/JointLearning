@@ -7,9 +7,9 @@ and `push_to_hub` without rewriting everything around a `PreTrainedModel`.
 
 Dependencies
 ------------
-• transformers ≥ 4.40  
-• torch ≥ 2.1  
-• huggingface_hub ≥ 0.20
+• transformers ≥ 4.40  
+• torch ≥ 2.1  
+• huggingface_hub ≥ 0.20
 
 Label utilities expected in your project (import wherever appropriate):
 ```
@@ -32,7 +32,7 @@ import torch.nn as nn
 from transformers import AutoModel, AutoTokenizer
 from huggingface_hub import PyTorchModelHubMixin
 
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+from .config import DEVICE, MODEL_CONFIG
 
 # --------------------------------------------------------------------------- #
 # Type aliases
@@ -59,11 +59,11 @@ class JointCausalModel(nn.Module, PyTorchModelHubMixin):
     # ------------------------------------------------------------------ #
     def __init__(
         self,
-        encoder_name: str,
-        num_cls_labels: int = 2,
-        num_bio_labels: int = 7,
-        num_rel_labels: int = 3,
-        dropout: float = 0.1,
+        encoder_name: str = MODEL_CONFIG["encoder_name"],
+        num_cls_labels: int = MODEL_CONFIG["num_cls_labels"],
+        num_bio_labels: int = MODEL_CONFIG["num_bio_labels"],
+        num_rel_labels: int = MODEL_CONFIG["num_rel_labels"],
+        dropout: float = MODEL_CONFIG["dropout"],
     ) -> None:
         super().__init__()
 

@@ -1,9 +1,9 @@
 # %%
-from dataset_collator import CausalDatasetCollator, CausalDataset, id2label_bio, id2label_rel, id2label_cls, ignore_id
+from src.jointlearning.dataset_collator import CausalDatasetCollator, CausalDataset, id2label_bio, id2label_rel, id2label_cls, ignore_id
 import pandas as pd
-from utility import compute_class_weights, label_value_counts
+from src.jointlearning.utility import compute_class_weights, label_value_counts
 from torch.utils.data import DataLoader
-from model import JointCausalModel
+from src.jointlearning.model import JointCausalModel
 import torch
 import numpy as np
 from sklearn.metrics import classification_report

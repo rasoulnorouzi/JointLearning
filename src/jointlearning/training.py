@@ -4,6 +4,8 @@ import torch.nn as nn
 from tqdm.auto import tqdm
 from torch.utils.data import Subset, DataLoader
 
+from .config import DEVICE, TRAINING_CONFIG
+
 def train_joint_model(
     model, 
     train_dataset,
@@ -14,16 +16,16 @@ def train_joint_model(
     id2label_rel,
     evaluate_model_fn,
     print_eval_report_fn,
-    device="cuda" if torch.cuda.is_available() else "cpu",
-    batch_size=8,
-    num_epochs=10,
-    learning_rate=5e-5,
+    device=DEVICE,
+    batch_size=TRAINING_CONFIG["batch_size"],
+    num_epochs=TRAINING_CONFIG["num_epochs"],
+    learning_rate=TRAINING_CONFIG["learning_rate"],
     train_subset_size=None,
-    model_save_path="best_joint_causal_model.pt",
-    patience_epochs=5,
-    weight_decay=0.01,
-    gradient_clip_val=1.0,
-    apply_gradient_clipping=False
+    model_save_path=TRAINING_CONFIG["model_save_path"],
+    patience_epochs=TRAINING_CONFIG["patience_epochs"],
+    weight_decay=TRAINING_CONFIG["weight_decay"],
+    gradient_clip_val=TRAINING_CONFIG["gradient_clip_val"],
+    apply_gradient_clipping=TRAINING_CONFIG["apply_gradient_clipping"]
 ):
     """
     Train a joint causal model with flexible configuration options.
