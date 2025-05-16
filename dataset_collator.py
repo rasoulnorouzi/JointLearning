@@ -1,24 +1,27 @@
 # %%
 import torch
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset
 from transformers import AutoTokenizer
 import json
-import pandas as pd
 import random
 import re # For checking punctuation in random spans
-from functools import partial
 
 # --- Configuration & Label Mappings --- (Assuming these are defined globally or passed appropriately)
-id2label_span = {0: "B-C", 1: "I-C", 2: "B-E", 3: "I-E", 4: "B-CE", 5: "I-CE", 6: "O"}
-label2id_span = {v: k for k, v in id2label_span.items()}
+id2label_bio = {0: "B-C", 1: "I-C", 2: "B-E", 3: "I-E", 4: "B-CE", 5: "I-CE", 6: "O"}
+label2id_bio = {v: k for k, v in id2label_bio.items()}
 entity_label_to_bio_prefix = {"cause": "C", "effect": "E", "internal_CE": "CE", "non-causal": "O"}
-NO_RELATION_LABEL_STR = "Rel_None"
-POSITIVE_RELATION_TYPE_TO_ID = {"Rel_CE": 1, "Rel_Zero": 2}
-id2label_rel = {0: NO_RELATION_LABEL_STR, 1: "Rel_CE", 2: "Rel_Zero"}
+id2label_rel = {0: "Rel_None", 1: "Rel_CE", 2: "Rel_Zero"}
 label2id_rel = {v: k for k, v in id2label_rel.items()}
-NEGATIVE_SAMPLE_REL_ID = label2id_rel[NO_RELATION_LABEL_STR]
+POSITIVE_RELATION_TYPE_TO_ID = {"Rel_CE": 1, "Rel_Zero": 2}
+NEGATIVE_SAMPLE_REL_ID = label2id_rel["Rel_None"]
 
-# Helper function to check span overlap
+id2label_cls = {0: "non-causal", 1: "causal"}
+label2id_cls = {v: k for k, v in id2label_cls.items()}
+ignore_id = -100
+
+
+
+#  Helper function to check span overlap
 def check_span_overlap_util(span1, span2):
     """Checks if two token spans (start_idx, end_idx) overlap."""
     return max(span1[0], span2[0]) <= min(span1[1], span2[1])
@@ -128,7 +131,7 @@ class CausalDataset(Dataset):
              final_bio_entities = [e for e in temp_bio_entities if e.get('label') == 'non-causal']
 
         current_sequence_length = len(input_ids_list)
-        bio_labels_list = [label2id_span["O"]] * current_sequence_length
+        bio_labels_list = [label2id_bio["O"]] * current_sequence_length
         entity_spans_for_relations = {}
 
         if final_bio_entities:
@@ -156,9 +159,9 @@ class CausalDataset(Dataset):
                     bio_prefix = entity_label_to_bio_prefix.get(entity_label_str)
                     if bio_prefix:
                         if bio_prefix != "O" and token_start < current_sequence_length:
-                            bio_labels_list[token_start] = label2id_span[f"B-{bio_prefix}"]
+                            bio_labels_list[token_start] = label2id_bio[f"B-{bio_prefix}"]
                             for i_bio in range(token_start + 1, min(token_end + 1, current_sequence_length)):
-                                if i_bio < current_sequence_length: bio_labels_list[i_bio] = label2id_span[f"I-{bio_prefix}"]
+                                if i_bio < current_sequence_length: bio_labels_list[i_bio] = label2id_bio[f"I-{bio_prefix}"]
                     current_span_for_relation = (token_start, token_end)
                     if 'original_ids' in entity_to_tag:
                         for orig_id in entity_to_tag['original_ids']: entity_spans_for_relations[orig_id] = current_span_for_relation

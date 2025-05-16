@@ -1,6 +1,7 @@
 import numpy as np
 import torch
-from collections import Counter # Not strictly needed with np.bincount but good for context
+import pandas as pd
+
 
 def compute_class_weights(
     labels_list,
@@ -130,3 +131,74 @@ def compute_class_weights(
     # So, the absolute scale of weights matters.
     
     return torch.tensor(weights, dtype=torch.float32)
+
+
+
+
+def label_value_counts(dataset_instance):
+    """
+    Computes the value counts for 'cls_label', 'bio_labels', 
+    and 'relation_tuples' from the given dataset instance.
+
+    Args:
+        dataset_instance: An instance of a dataset (e.g., CausalDataset) 
+                          that contains 'cls_label', 'bio_labels', and 
+                          'relation_tuples' keys in its items.
+
+    Returns:
+        tuple: A tuple containing three lists:
+            - cls_labels_flat (list): A flat list of all cls_labels.
+            - bio_labels_flat (list): A flat list of all bio_labels.
+            - rel_labels_flat (list): A flat list of all relation labels.
+    """
+    # --- Classification (cls) Labels ---
+    # Initialize an empty list to store all cls_labels
+    cls_labels_flat = []
+    # Iterate over each item in the dataset
+    for i in range(len(dataset_instance)):
+        # Append the 'cls_label' of the current item to the list
+        cls_labels_flat.append(dataset_instance[i]['cls_label'])
+    # Convert the list of cls_labels to a pandas Series for easy value counting
+    cls_labels_flat_series = pd.Series(cls_labels_flat)
+    # Compute the value counts for each class
+    cls_labels_value_counts = cls_labels_flat_series.value_counts()
+    # Print the value counts for cls_labels
+    print(f"cls_labels_value_counts:\n {cls_labels_value_counts}")
+
+    # --- BIO (span) Labels ---
+    # Initialize an empty list to store all bio_labels
+    bio_labels_flat = []
+    # Iterate over each item in the dataset
+    for i in range(len(dataset_instance)):
+        # Extend the list with the 'bio_labels' of the current item
+        # 'extend' is used because 'bio_labels' is a list itself
+        bio_labels_flat.extend(dataset_instance[i]['bio_labels'])
+
+    # Convert the list of bio_labels to a pandas Series
+    bio_labels_flat_series = pd.Series(bio_labels_flat)
+    # Compute the value counts for each BIO tag
+    bio_labels_value_counts = bio_labels_flat_series.value_counts()
+    # Print the value counts for bio_labels
+    print(f"bio_labels_value_counts:\n {bio_labels_value_counts}")
+
+    # --- Relation (rel) Labels ---
+    # Initialize an empty list to store all relation labels
+    rel_labels_flat = []
+    # Iterate over each item in the dataset
+    for i in range(len(dataset_instance)):
+        # Check if 'relation_tuples' exist and is not empty for the current item
+        if dataset_instance[i]['relation_tuples']:
+            relation_tuples = dataset_instance[i]['relation_tuples']
+            # Iterate over each tuple in 'relation_tuples'
+            for tp in relation_tuples:
+                # The relation label is the third element (index 2) in the tuple
+                rel_labels_flat.append(tp[2])
+    # Convert the list of relation labels to a pandas Series
+    rel_labels_flat_series = pd.Series(rel_labels_flat)
+    # Compute the value counts for each relation type
+    rel_labels_value_counts = rel_labels_flat_series.value_counts()
+    # Print the value counts for rel_labels
+    print(f"rel_labels_value_counts:\n {rel_labels_value_counts}")
+
+    # Return the flat lists of cls_labels, bio_labels, and relation labels
+    return cls_labels_flat, bio_labels_flat, rel_labels_flat

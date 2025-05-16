@@ -1,117 +1,140 @@
 # %%
-import random
-from dataset_collator import CausalDatasetCollator, CausalDataset, id2label_span, id2label_rel, NEGATIVE_SAMPLE_REL_ID
+from dataset_collator import CausalDatasetCollator, CausalDataset, id2label_bio, id2label_rel, id2label_cls, ignore_id
 import pandas as pd
-from utility import compute_class_weights
+from utility import compute_class_weights, label_value_counts
 from torch.utils.data import DataLoader
 from model import JointCausalModel
 import torch
-# %%
-training_data_path = "datasets/train.csv"
-# %%
-train_df = pd.read_csv(training_data_path)
-# %%
-full_dataset_instance = CausalDataset(train_df, "google-bert/bert-base-uncased", 256, 2.0)
-# %%
-all_cls_labels = []
-for i in range(len(full_dataset_instance)):
-    sample = full_dataset_instance[i]
-    all_cls_labels.append(sample['cls_label'])
-# %%
-# value counts for cls_labels with numpy
 import numpy as np
-cls_labels = np.array(all_cls_labels)
-unique_cls_labels, cls_counts = np.unique(cls_labels, return_counts=True)
-print("Unique cls_labels:", unique_cls_labels)
-print("Counts of cls_labels:", cls_counts)
+from sklearn.metrics import classification_report
 # %%
-BIO_IGNORE_INDEX = -100
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # %%
-# Define num_classes for sentence classification (e.g., 2 for causal/non-causal)
-NUM_CLS_CLASSES = 2 # Example
-cls_weights = compute_class_weights(all_cls_labels, NUM_CLS_CLASSES, technique='inverse_frequency')
-print(f"Sentence Classification Weights ({NUM_CLS_CLASSES} classes): {cls_weights}")
+train_df = pd.read_csv("datasets/train.csv")
+val_df = pd.read_csv("datasets/val.csv")
 # %%
-# 2. For BIO Tagging ('bio_labels')
-all_bio_labels_flat = []
-for i in range(len(full_dataset_instance)):
-    sample = full_dataset_instance[i]
-    all_bio_labels_flat.extend(sample['bio_labels']) # .extend() as bio_labels is a list
-
-# Define num_classes for BIO tagging (e.g., len(id2label_span))
-NUM_BIO_CLASSES = len(id2label_span) # Example: 7
-bio_weights = compute_class_weights(
-    all_bio_labels_flat,
-    NUM_BIO_CLASSES,
-    technique='median_frequency',
-    ignore_index=BIO_IGNORE_INDEX
-)
-print(f"BIO Tagging Weights ({NUM_BIO_CLASSES} classes): {bio_weights}")
+checkpoint = "google-bert/bert-base-uncased"
+max_length_truncate=256
+num_samples_to_report=1
+negative_rel_rate_for_report=2.0
+# %%
+train_dataset_instance = CausalDataset(train_df, checkpoint, max_length_truncate, negative_rel_rate_for_report)
+val_dataset_instance = CausalDataset(val_df, checkpoint, max_length_truncate, negative_rel_rate_for_report)
+# %%
+cls_labels, bio_labels, rel_labels = label_value_counts(train_dataset_instance)
+# %%
+cls_weights = compute_class_weights(cls_labels, num_classes=len(id2label_cls))
+bio_weights = compute_class_weights(bio_labels, num_classes=len(id2label_bio), ignore_index=ignore_id)
+rel_weights = compute_class_weights(rel_labels, num_classes=len(id2label_rel), ignore_index=ignore_id)
 # %%
 collator_fn = CausalDatasetCollator(
-        tokenizer=full_dataset_instance.tokenizer,
-        num_rel_labels_model_expects=len(id2label_rel) # Use actual number of defined relation labels
-)
-# %%
+    tokenizer = train_dataset_instance.tokenizer,
+    num_rel_labels_model_expects= len(id2label_rel)
+    )
 train_loader = DataLoader(
-    full_dataset_instance,
-    batch_size=5,
-    shuffle=True,
-    collate_fn=collator_fn
+    train_dataset_instance,
+    batch_size=8,
+    collate_fn=collator_fn,
+    shuffle=True
+)
+val_loader = DataLoader(
+    val_dataset_instance,
+    batch_size=8,
+    collate_fn=collator_fn,
+    shuffle=False
 )
 # %%
-# print the three first batches
-for i, batch in enumerate(train_loader):
-    if i < 3:
-        print(f"Batch {i}:")
-        for key, value in batch.items():
-            print(f"  {key}: {value}")
-    else:
-        break
-
+cls_loss_fn = torch.nn.CrossEntropyLoss(weight=cls_weights)
+bio_loss_fn = torch.nn.CrossEntropyLoss(weight=bio_weights, ignore_index=ignore_id)
+rel_loss_fn = torch.nn.CrossEntropyLoss(weight=rel_weights, ignore_index=ignore_id)
 # %%
 model = JointCausalModel(
-    encoder_name="google-bert/bert-base-uncased",
-    num_cls_labels=NUM_CLS_CLASSES,
-    num_span_labels=NUM_BIO_CLASSES,
-    num_rel_labels=len(id2label_rel) # Use actual number of defined relation labels
-)
-device = "cuda" if torch.cuda.is_available() else "cpu"
-model.to(device)
+    encoder_name=checkpoint,
+    num_cls_labels=len(id2label_cls),
+    num_bio_labels=len(id2label_bio),
+    num_rel_labels=len(id2label_rel)
+).to(device)
 # %%
-# Lets feed a batch to the model
-batch = next(iter(train_loader))
-# Move the batch to the same device as the model
-batch = {k: v.to(device) for k, v in batch.items()}
-# Feed the batch to the model
+# print 1 sample from dataloader
 
-'''
-make a dictionary of input_ids=batch['input_ids'],
-    attention_mask=batch['attention_mask'],
-    pair_batch=batch['pair_batch'],
-    cause_starts=batch['cause_starts'],
-    cause_ends=batch['cause_ends'],
-    effect_starts=batch['effect_starts'],
-    effect_ends=batch['effect_ends'],
-    rel_labels=batch['rel_labels']
-
-'''
-input_dict = {
-    "input_ids": batch['input_ids'],
-    "attention_mask": batch['attention_mask'],
-    "pair_batch": batch['pair_batch'],
-    "cause_starts": batch['cause_starts'],
-    "cause_ends": batch['cause_ends'],
-    "effect_starts": batch['effect_starts'],
-    "effect_ends": batch['effect_ends']
-}
-output = model(
-    **input_dict    
-)
-# Print the output
+for batch in train_loader:
+    print("#" * 20)
+    print(batch)
+    print("#" * 20)
+    break
 # %%
-print(output)
-# %%
+# feed a batch of data to the model
+for batch in train_loader:
+    input_ids = batch["input_ids"].to(device)
+    attention_mask = batch["attention_mask"].to(device)
 
-batch
+    cls_labels = batch["cls_labels"].to(device)
+    bio_labels = batch["bio_labels"].to(device)
+    rel_labels_gold = batch['rel_labels'].to(device) if batch['rel_labels'] is not None else None
+
+    pair_batch_data = batch['pair_batch'].to(device) if batch['pair_batch'] is not None else None
+    cause_starts_data = batch['cause_starts'].to(device) if batch['cause_starts'] is not None else None
+    cause_ends_data = batch['cause_ends'].to(device) if batch['cause_ends'] is not None else None
+    effect_starts_data = batch['effect_starts'].to(device) if batch['effect_starts'] is not None else None
+    effect_ends_data = batch['effect_ends'].to(device) if batch['effect_ends'] is not None else None
+
+    # Forward pass
+    output = model(
+                input_ids=input_ids, 
+                attention_mask=attention_mask,
+                pair_batch=pair_batch_data, 
+                cause_starts=cause_starts_data, 
+                cause_ends=cause_ends_data,
+                effect_starts=effect_starts_data, 
+                effect_ends=effect_ends_data
+            )
+    print(output)
+    print("#" * 20)
+    print(f"input_ids: {input_ids.shape}")
+    print(f"attention_mask: {attention_mask.shape}")
+    print(f"cls_labels: {cls_labels.shape}")
+    print(f"bio_labels: {bio_labels.shape}")
+    print(f"rel_labels_gold: {rel_labels_gold.shape}")
+    print(f"pair_batch_data: {pair_batch_data.shape}")
+    print(f"cause_starts_data: {cause_starts_data.shape}")
+    print(f"cause_ends_data: {cause_ends_data.shape}")
+    print(f"effect_starts_data: {effect_starts_data.shape}")
+    print(f"effect_ends_data: {effect_ends_data.shape}")
+    print(f"output['cls_logits']: {output['cls_logits'].shape}")
+    print(f"output['bio_logits']: {output['bio_logits'].shape}")
+    print(f"output['rel_logits']: {output['rel_logits'].shape}")
+
+
+    cls_loss = cls_loss_fn(output['cls_logits'], cls_labels)
+    bio_loss = bio_loss_fn(output['bio_logits'].view(-1, len(id2label_bio)), bio_labels.view(-1))
+    rel_loss = rel_loss_fn(output['rel_logits'].view(-1, len(id2label_rel)), rel_labels_gold.view(-1))
+   
+    print("#" * 20)
+    print(f"cls_logits: {output['cls_logits'].shape}")
+    print(f"bio_logits: {output['bio_logits'].shape}")
+    print(f"rel_logits: {output['rel_logits'].shape}")
+    
+    print(f"cls_loss: {cls_loss.item()}")
+    print(f"bio_loss: {bio_loss.item()}")
+    print(f"rel_loss: {rel_loss.item()}")
+    break
+# %%
+cls_loss = cls_loss_fn(output['cls_logits'], cls_labels)
+print(f"cls_loss: {cls_loss.item()}")
+# %%
+bio_loss = bio_loss_fn(output['bio_logits'].view(-1, len(id2label_bio)), bio_labels.view(-1))
+print(f"bio_loss: {bio_loss.item()}")
+# %%
+output['bio_logits'].view(-1, len(id2label_bio)).shape
+# %%
+rel_loss = rel_loss_fn(output['rel_logits'], rel_labels_gold)
+print(f"rel_loss: {rel_loss.item()}")
+# %%
+output['rel_logits'].shape
+# %%
+rel_labels_gold.shape
+# %%
+output['rel_logits'].view(-1, len(id2label_rel)).shape
+# %%
+rel_labels_gold.view(-1).shape
 # %%
