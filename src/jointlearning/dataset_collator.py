@@ -6,7 +6,7 @@ import json
 import random
 import re # For checking punctuation in random spans
 
-from src.jointlearning.config import (
+from config import (
     DATASET_CONFIG,
     id2label_bio,
     label2id_bio,
@@ -17,22 +17,10 @@ from src.jointlearning.config import (
     label2id_cls,
     POSITIVE_RELATION_TYPE_TO_ID,
     NEGATIVE_SAMPLE_REL_ID,
+    MODEL_CONFIG
 )
 
-# --- Configuration & Label Mappings --- (Assuming these are defined globally or passed appropriately)
-id2label_bio = {0: "B-C", 1: "I-C", 2: "B-E", 3: "I-E", 4: "B-CE", 5: "I-CE", 6: "O"}
-label2id_bio = {v: k for k, v in id2label_bio.items()}
-entity_label_to_bio_prefix = {"cause": "C", "effect": "E", "internal_CE": "CE", "non-causal": "O"}
-id2label_rel = {0: "Rel_None", 1: "Rel_CE", 2: "Rel_Zero"}
-label2id_rel = {v: k for k, v in id2label_rel.items()}
-POSITIVE_RELATION_TYPE_TO_ID = {"Rel_CE": 1, "Rel_Zero": 2}
-NEGATIVE_SAMPLE_REL_ID = label2id_rel["Rel_None"]
-
-id2label_cls = {0: "non-causal", 1: "causal"}
-label2id_cls = {v: k for k, v in id2label_cls.items()}
 ignore_id = -100
-
-
 
 #  Helper function to check span overlap
 def check_span_overlap_util(span1, span2):
@@ -301,9 +289,8 @@ class CausalDatasetCollator:
     """
     Collator class for CausalDataset. Handles dynamic padding and tensor conversion.
     """
-    def __init__(self, tokenizer: AutoTokenizer, num_rel_labels_model_expects: int):
+    def __init__(self, tokenizer: AutoTokenizer):
         self.tokenizer = tokenizer
-        self.num_rel_labels_model_expects = num_rel_labels_model_expects
     
     def __call__(self, batch: list) -> dict:
         features_for_padding, bio_labels_unpadded_batch, cls_labels_list, relation_tuples_batch = [], [], [], []
@@ -326,9 +313,13 @@ class CausalDatasetCollator:
         for i, rel_tuples_sample in enumerate(relation_tuples_batch):
             if rel_tuples_sample:
                 for (c_span, e_span, rel_id) in rel_tuples_sample:
-                    if rel_id >= self.num_rel_labels_model_expects:
-                        rel_id = NEGATIVE_SAMPLE_REL_ID
-                        if rel_id >= self.num_rel_labels_model_expects: continue
+                    if rel_id >= MODEL_CONFIG["num_rel_labels"]:
+                        current_negative_sample_rel_id = label2id_rel.get("Rel_None")
+                        if current_negative_sample_rel_id is None:
+                            raise ValueError("Rel_None not found in label2id_rel from config")
+                        rel_id = current_negative_sample_rel_id
+                        if rel_id >= MODEL_CONFIG["num_rel_labels"]: 
+                            continue
                     pair_idx.append(i)
                     c_starts.append(c_span[0]); c_ends.append(c_span[1])
                     e_starts.append(e_span[0]); e_ends.append(e_span[1])

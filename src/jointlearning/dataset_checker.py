@@ -1,7 +1,7 @@
 # %%
 import random
-from src.jointlearning.dataset_collator import CausalDatasetCollator, CausalDataset
-from src.jointlearning.config import id2label_bio, id2label_rel, NEGATIVE_SAMPLE_REL_ID
+from dataset_collator import CausalDatasetCollator, CausalDataset
+from config import id2label_bio, id2label_rel, NEGATIVE_SAMPLE_REL_ID
 import pandas as pd
 import torch
 
@@ -9,7 +9,7 @@ import torch
 # --- generate_full_report function ---
 def generate_full_report(csv_path="train.csv", tokenizer_name="google-bert/bert-base-uncased", 
                          max_length_truncate=256, num_samples_to_report=15, negative_rel_rate_for_report=3.0): # Increased rate
-    random.seed(8642) 
+    random.seed(864) 
     try:
         df = pd.read_csv(csv_path)
         print(f"Successfully loaded {csv_path}. Total rows: {len(df)}\n")
@@ -106,8 +106,7 @@ def generate_full_report(csv_path="train.csv", tokenizer_name="google-bert/bert-
         print(f"Testing collator with {len(collate_test_batch)} samples (iloc indices: {collate_test_batch_indices}).")
 
         collator_instance = CausalDatasetCollator(
-            tokenizer=full_dataset_instance.tokenizer,
-            num_rel_labels_model_expects=len(id2label_rel) # Use actual number of defined relation labels
+            tokenizer=full_dataset_instance.tokenizer
         )
         try:
             batched_data = collator_instance(collate_test_batch)
@@ -133,7 +132,8 @@ if __name__ == '__main__':
     MAX_LEN_FOR_DATASET_TRUNCATION = 256 
 
     # Ensure this path is correct for your environment
-    CSV_FILE_PATH = "datasets/expert_multi_task_data/train.csv" # Assuming train.csv is in the same directory as the script
+    CSV_FILE_PATH = "C:/Users/norouzin/Desktop/JointLearning/datasets/expert_multi_task_data/train.csv" # Adjust as needed
+    # Assuming train.csv is in the same directory as the script
     # CSV_FILE_PATH = "datasets/train.csv" # Or if it's in a subdirectory
 
     generate_full_report(

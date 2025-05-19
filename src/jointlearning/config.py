@@ -12,7 +12,7 @@ MODEL_CONFIG = {
     "encoder_name": "bert-base-uncased",  # Default encoder
     "num_cls_labels": 2,                 # Binary classification for causal/non-causal
     "num_bio_labels": 7,                 # BIO labels for span detection
-    "num_rel_labels": 3,                 # Relation labels
+    "num_rel_labels": 2,                 # Relation labels (updated from 3 to 2)
     "dropout": 0.1,                      # Dropout rate
 }
 
@@ -60,10 +60,12 @@ entity_label_to_bio_prefix = {
 # Relation labels
 id2label_rel = {
     0: "Rel_None",
-    1: "Rel_CE",
-    2: "Rel_Zero"
+    1: "Rel_CE"
 }
-label2id_rel = {v: k for k, v in id2label_rel.items()}
+label2id_rel = {
+    "Rel_None": 0,
+    "Rel_CE": 1
+}
 
 # Classification labels
 id2label_cls = {
@@ -74,12 +76,11 @@ label2id_cls = {v: k for k, v in id2label_cls.items()}
 
 # Relation type mappings
 POSITIVE_RELATION_TYPE_TO_ID = {
-    "Rel_CE": 1,
-    "Rel_Zero": 2
+    "Rel_CE": 1
 }
 NEGATIVE_SAMPLE_REL_ID = label2id_rel["Rel_None"]
 
 # Inference configuration
 INFERENCE_CONFIG = {
     "cls_threshold": 0.5,  # Threshold for causal/non-causal classification
-} 
+}
