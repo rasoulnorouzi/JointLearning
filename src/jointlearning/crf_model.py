@@ -163,7 +163,7 @@ class JointCausalModel(nn.Module, PyTorchModelHubMixin):
             nn.Linear(self.hidden_size // 2, num_bio_labels),
         )
 
-        self.crf: Optional[CRF] = CRF(num_bio_labels, batch_first=True) if use_crf else None
+        self.crf: CRF | None = CRF(num_bio_labels, batch_first=True) if use_crf else None
 
         self.rel_head = nn.Sequential(
             nn.Linear(self.hidden_size * 2, self.hidden_size),
@@ -242,7 +242,7 @@ class JointCausalModel(nn.Module, PyTorchModelHubMixin):
             else:
                 tag_loss = torch.tensor(0.0, device=emissions.device)  # computed externally to allow weighting
 
-        rel_logits: Optional[torch.Tensor] = None
+        rel_logits: torch.Tensor | None = None
         if pair_batch is not None:
             bio_states = hidden[pair_batch]
             seq_len = bio_states.size(1)
