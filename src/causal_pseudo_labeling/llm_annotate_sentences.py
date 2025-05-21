@@ -1,4 +1,5 @@
 # %%
+from __future__ import annotations
 from typing import List, Optional
 import pandas as pd
 from vllm import LLM, SamplingParams
@@ -6,7 +7,7 @@ from transformers import AutoTokenizer
 import json
 import datetime
 import os
-# %%
+
 
 """Simple, self-contained pipeline to annotate sentences with a large-language model
    using vLLM. Designed for a single-GPU workstation (e.g. NVIDIA A10, 24 GB VRAM).
@@ -45,7 +46,6 @@ GPU_MEMORY_UTILISATION: float = 0.90 # fraction of GPU RAM vLLM may allocate
 RANDOM_SEED: int = 8642                # reproducible sampling
 SAVE_INTERVAL: int = 5000            # Save results every N samples processed
 # ────────────────────────────────────────────────────────────────────────────────
-# %%
 
 def load_prompt_template(path: str) -> str:
     """Read the prompt template containing the ``{{SENTENCE}}`` placeholder."""
@@ -76,7 +76,7 @@ def build_prompts(template: str, sentences: List[str], use_chat: bool,
         ]
     # Fallback: plain string replacement (user supplies full template).
     return [template.replace("{{SENTENCE}}", s) for s in sentences]
-#%%
+
 
 def save_results_to_file(results: List[str], filename: str) -> None:
     """Save results to a JSONL file."""

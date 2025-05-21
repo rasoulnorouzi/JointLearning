@@ -26,7 +26,7 @@
 
 ## Output Format (Required)
 
-You **MUST** output **only** a single JSON object that follows this exact schema.
+You **MUST** output **only** a single JSON object that follows this exact schema. No surrounding words, labels, headers, markdown, or code fences.
 
 **For causal sentences**
 
@@ -39,12 +39,12 @@ You **MUST** output **only** a single JSON object that follows this exact schema
      {
        "cause": "[exact cause text 1]",
        "effect": "[exact effect text 1]",
-       "polarity": "Rel_CE"
+       "type": "Rel_CE"
      },
      {
        "cause": "[exact cause text 2]",
        "effect": "[exact effect text 2]",
-       "polarity": "Rel_CE"
+       "type": "Rel_CE"
      }
      // ... potentially more relations
   ]
@@ -70,9 +70,9 @@ You **MUST** output **only** a single JSON object that follows this exact schema
 
   * If `"causal": false`, the list **must** be empty.
   * If `"causal": true`, include one object for **each** distinct cause–effect pair you identify.
-* Every object in `"relations"` **must** have the keys `"cause"`, `"effect"`, and `"polarity"`.
+* Every object in `"relations"` **must** have the keys `"cause"`, `"effect"`, and `"type"`.
 * The values of `"cause"` and `"effect"` **must** be the exact spans from the sentence.
-* The value of `"polarity"` is always the string **`"Rel_CE"`**.
+* The value of `"type"` is always the string **`"Rel_CE"`**.
 * **Do not** add explanations, comments, keys, or text outside the single JSON object.
 
 ---
@@ -88,8 +88,10 @@ You **MUST** output **only** a single JSON object that follows this exact schema
     - A sentence can contain multiple independent cause-effect pairs. List them all.
     - An effect can sometimes become the cause of a subsequent effect (causal chain). List both pairs sequentially.
     - For each pair, extract the exact Cause phrase and the exact Effect phrase from the sentence. Do not modify, shorten, or extend the phrases. This is true for cause spans as well as effect spans.
-    - Determine the Polarity ("Rel_CE") for each pair.
-    - Populate the "relations" list with a dictionary ({"cause": "...", "effect": "...", "polarity": "..."}) for each identified pair.
+    - In a statement like "A causes B by/through/because of C," treat C as the initial necessary factor that produces B, which in turn is required for A to occur; each link in the chain should be evaluated for its necessary and sufficient role.
+    - If replacing "when" with "if" or "because" preserves the meaning of one event triggering another, then "when" signals a causal relationship; if not, it merely marks a temporal sequence.
+    - Determine the type ("Rel_CE") for each pair.
+    - Populate the "relations" list with a dictionary ({"cause": "...", "effect": "...", "type": "..."}) for each identified pair.
     - Construct the final JSON object including the "text" key (containing the original input sentence), and the "relations" list.
     - Format the entire output as a single JSON object exactly as shown in the required output format.
 
@@ -97,9 +99,18 @@ You **MUST** output **only** a single JSON object that follows this exact schema
     - Ensure the "relations" list is empty ([]).
     - Construct the final JSON object including the "text" key (containing the original input sentence), the "causal": false key-value pair, and the empty "relations" list.
     - Format the entire output as a single JSON object exactly as shown in the required output format for non-causal sentences.
+5. NON-NEGOTIABLE RULE  
+    -Keep **only** relations whose `cause` **and** `effect` substrings appear verbatim (case-sensitive) in `text`.  
+      - If a draft relation fails this test, DELETE that relation.  
+      - If no relations survive, output:
+          {"text":"<sentence>", "causal": false, "relations":[]}
+---
 
-# Examples
+## WORKED EXAMPLES  (reference only – do not copy the labels)
 
+Each example shows INPUT (the sentence) and OUTPUT (the correct JSON).  When you answer, output only the JSON block – no INPUT: / OUTPUT: lines, no extra words, no code fences.
+
+---
 
 Input: according to smith (2008), there is a need for substantial and consistent support and encouragement for women to participate in studies.
 Output:
@@ -110,12 +121,12 @@ Output:
     {
       "cause": "substantial and consistent support",
       "effect": "women to participate in studies",
-      "polarity": "Rel_CE"
+      "type": "Rel_CE"
     },
     {
       "cause": "encouragement",
       "effect": "women to participate in studies",
-      "polarity": "Rel_CE"
+      "type": "Rel_CE"
     }
   ]
 }
@@ -131,12 +142,12 @@ Output:
     {
       "cause": "experiencing a task that leads to decrements in feelings of relatedness",
       "effect": "influencing people's mood",
-      "polarity": "Rel_CE"
+      "type": "Rel_CE"
     },
     {
       "cause": "influencing people's mood",
       "effect": "affect people's ability to experience intrinsic motivation",
-      "polarity": "Rel_CE"
+      "type": "Rel_CE"
     }
   ]
 }
@@ -152,12 +163,12 @@ Output:
     {
       "cause": "feeling social pain",
       "effect": "negative affect",
-      "polarity": "Rel_CE"
+      "type": "Rel_CE"
     },
     {
       "cause": "feeling social pain",
       "effect": "threats to basic needs",
-      "polarity": "Rel_CE"
+      "type": "Rel_CE"
     }
   ]
 }
@@ -174,7 +185,7 @@ Output:
     {
       "cause": "unexpected rejection",
       "effect": "aggressive responses",
-      "polarity": "Rel_CE"
+      "type": "Rel_CE"
     }
   ]
 }
@@ -189,7 +200,7 @@ Output:
     {
       "cause": "unwillingness to regulate the self",
       "effect": "excluded (relative to included or control) participants are more likely to exhibit the confirmation bias",
-      "polarity": "Rel_CE"
+      "type": "Rel_CE"
     }
   ]
 }
@@ -215,12 +226,12 @@ Output:
     {
       "cause": "less interesting tasks",
       "effect": "drops in performance",
-      "polarity": "Rel_CE"
+      "type": "Rel_CE"
     },
     {
       "cause": "a more interesting task",
       "effect": "serve as a more appealing means to recover from the ostracism experience",
-      "polarity": "Rel_CE"
+      "type": "Rel_CE"
     }
   ]
 }
@@ -236,12 +247,12 @@ Output:
     {
       "cause": "each instance of qualitative research is perceived as a unique process requiring the researcher to craft his or her own method",
       "effect": "flexibility, versatility, and creativity have been emphasised",
-      "polarity": "Rel_CE"
+      "type": "Rel_CE"
     },
     {
       "cause": "each instance of qualitative research is perceived as a unique process requiring the researcher to craft his or her own method",
       "effect": "methodological ambiguity tolerated as an inescapable, even desirable, component of the process",
-      "polarity": "Rel_CE"
+      "type": "Rel_CE"
     }
   ]
 }
@@ -257,12 +268,12 @@ Output:
     {
       "cause": "self affirmation",
       "effect": "facilitate non-defensive processing among unrealistic optimists",
-      "polarity": "Rel_CE"
+      "type": "Rel_CE"
     },
     {
       "cause": "its absence in the face of threat",
       "effect": "foster such defensive processing",
-      "polarity": "Rel_CE"
+      "type": "Rel_CE"
     }
   ]
 }
@@ -279,12 +290,12 @@ Output:
     {
       "cause": "mode of governance",
       "effect": "the built environment",
-      "polarity": "Rel_CE"
+      "type": "Rel_CE"
     },
     {
       "cause": "the built environment",
       "effect": "producing places and contradictions",
-      "polarity": "Rel_CE"
+      "type": "Rel_CE"
     }
   ]
 }
@@ -300,12 +311,12 @@ Output:
     {
       "cause": "become ""aware of an issue"" through their research",
       "effect": "ethnographers might become an advocate",
-      "polarity": "Rel_CE"
+      "type": "Rel_CE"
     },
     {
       "cause": "become ""more deeply committed to the issue"" through their research",
       "effect": "ethnographers might become an advocate",
-      "polarity": "Rel_CE"
+      "type": "Rel_CE"
     }
   ]
 }
@@ -333,19 +344,16 @@ Output:
     {
       "cause": "organisation of the in‐flow of information",
       "effect": "producing valid and relevant information",
-      "polarity": "Rel_CE"
+      "type": "Rel_CE"
     },
     {
       "cause": "a degree of critical distance kept with the field intensity",
       "effect": "producing valid and relevant information",
-      "polarity": "Rel_CE"
+      "type": "Rel_CE"
     }
   ]
 }
 
-
-
-IMPORTANT: Produce only the JSON object—no additional text.
 
 Now, analyze the following sentence:
 {{SENTENCE}}
