@@ -41,6 +41,23 @@ def compute_class_weights(
     Returns:
         torch.Tensor: A 1D tensor of length `num_classes` containing the calculated weights.
                       Returns a tensor of ones if labels_list is empty or no valid labels found after filtering.
+
+    Examples:
+        >>> labels = [0, 1, 1, 0, 2, 1, 1, 0, 0] # Example labels
+        >>> num_classes = 3
+        >>> weights_inv_freq = compute_class_weights(labels, num_classes, technique='inverse_frequency')
+        >>> print(weights_inv_freq)
+        tensor([2.2500, 2.2500, 9.0000])
+
+        >>> weights_ens = compute_class_weights(labels, num_classes, technique='ens', beta=0.9)
+        >>> print(weights_ens)
+        tensor([0.2918, 0.2918, 1.1111])
+
+        >>> bio_labels = [0, 1, 2, 0, 1, 1, -100, 2, 0] # With an ignore_index
+        >>> num_bio_classes = 3
+        >>> weights_bio = compute_class_weights(bio_labels, num_bio_classes, ignore_index=-100)
+        >>> print(weights_bio)
+        tensor([2.6667, 2.6667, 4.0000])
     """
     if not isinstance(labels_list, (list, np.ndarray, torch.Tensor)):
         raise TypeError("labels_list must be a list, NumPy array, or PyTorch tensor.")
@@ -150,6 +167,45 @@ def label_value_counts(dataset_instance):
             - cls_labels_flat (list): A flat list of all cls_labels.
             - bio_labels_flat (list): A flat list of all bio_labels.
             - rel_labels_flat (list): A flat list of all relation labels.
+
+    Examples:
+        >>> # Assuming CausalDataset is defined and dataset_instance is an instance of it
+        >>> # For demonstration, let's mock a dataset_instance:
+        >>> class MockDataset:
+        ...     def __init__(self, data):
+        ...         self.data = data
+        ...     def __len__(self):
+        ...         return len(self.data)
+        ...     def __getitem__(self, idx):
+        ...         return self.data[idx]
+        >>> mock_data = [
+        ...     {'cls_label': 0, 'bio_labels': ['O', 'B-C', 'I-C'], 'relation_tuples': [('entity1', 'entity2', 'causes')]},
+        ...     {'cls_label': 1, 'bio_labels': ['O', 'B-E', 'I-E'], 'relation_tuples': [('entity3', 'entity4', 'mitigates')]},
+        ...     {'cls_label': 0, 'bio_labels': ['O', 'O'], 'relation_tuples': []}
+        ... ]
+        >>> dataset_instance = MockDataset(mock_data)
+        >>> cls_flat, bio_flat, rel_flat = label_value_counts(dataset_instance)
+        cls_labels_value_counts:
+         0    2
+        1    1
+        Name: count, dtype: int64
+        bio_labels_value_counts:
+         O      4
+        B-C    1
+        I-C    1
+        B-E    1
+        I-E    1
+        Name: count, dtype: int64
+        rel_labels_value_counts:
+         causes       1
+        mitigates    1
+        Name: count, dtype: int64
+        >>> print(cls_flat)
+        [0, 1, 0]
+        >>> print(bio_flat)
+        ['O', 'B-C', 'I-C', 'O', 'B-E', 'I-E', 'O', 'O']
+        >>> print(rel_flat)
+        ['causes', 'mitigates']
     """
     # --- Classification (cls) Labels ---
     # Initialize an empty list to store all cls_labels
