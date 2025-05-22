@@ -30,11 +30,53 @@ def check_span_overlap_util(span1, span2):
 class CausalDataset(Dataset):
     """
     PyTorch Dataset class for processing causal text data.
-    __getitem__ returns UNPADDED sequences. Padding is handled by the collate function.
+
+    This class handles the tokenization of text, identification of entities
+    and relations, and the generation of negative samples for relation
+    classification. It prepares the data in a format suitable for training
+    a joint entity and relation extraction model.
+
+    The `__getitem__` method returns unpadded sequences. Padding is handled
+    by the `CausalDatasetCollator` class.
+
+    Attributes:
+        dataframe (pd.DataFrame): DataFrame containing the text data, entities, and relations.
+        tokenizer (AutoTokenizer): Tokenizer for converting text to input IDs.
+        max_length (int): Maximum sequence length for tokenization.
+        negative_relation_rate (float): Rate at which negative relation samples are generated
+                                        relative to positive samples.
+        max_random_span_len (int): Maximum length of randomly generated spans for negative sampling.
+
+    Example:
+        >>> import pandas as pd
+        >>> from transformers import AutoTokenizer
+        >>> df = pd.DataFrame({
+        ...     'text': ["The rain caused flooding."],
+        ...     'entities': ["[{ 'id': 1, 'label': 'cause', 'start_offset': 4, 'end_offset': 8 }, { 'id': 2, 'label': 'effect', 'start_offset': 16, 'end_offset': 24 }]"] ,
+        ...     'relations': ["[{ 'from_id': 1, 'to_id': 2, 'type': 'Cause-Effect' }]"]
+        ... })
+        >>> dataset = CausalDataset(df, tokenizer_name='bert-base-uncased')
+        >>> sample = dataset[0]
+        >>> print(sample['input_ids'])
+        >>> print(sample['bio_labels'])
+
     """
     def __init__(self, dataframe, tokenizer_name, max_length=DATASET_CONFIG["max_length"], 
                  negative_relation_rate=DATASET_CONFIG["negative_relation_rate"], 
                  max_random_span_len=DATASET_CONFIG["max_random_span_len"]):
+        """
+        Initializes the CausalDataset.
+
+        Args:
+            dataframe (pd.DataFrame): The input DataFrame with 'text', 'entities', and 'relations' columns.
+            tokenizer_name (str): The name of the Hugging Face tokenizer to use.
+            max_length (int, optional): The maximum length for tokenized sequences.
+                                       Defaults to DATASET_CONFIG["max_length"].
+            negative_relation_rate (float, optional): The rate for generating negative relation samples.
+                                                     Defaults to DATASET_CONFIG["negative_relation_rate"].
+            max_random_span_len (int, optional): The maximum length for random spans in negative sampling.
+                                                Defaults to DATASET_CONFIG["max_random_span_len"].
+        """
         self.dataframe = dataframe.copy()
         self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
         self.max_length = max_length
@@ -50,9 +92,22 @@ class CausalDataset(Dataset):
         self.dataframe.loc[:, 'relations_parsed'] = self.dataframe['relations'].apply(safe_json_loads)
 
     def __len__(self):
+        """Returns the total number of samples in the dataset."""
         return len(self.dataframe)
 
     def _get_word_indices_for_entity(self, entity_char_start, entity_char_end, token_offsets, word_ids_list):
+        """
+        Identifies the set of word indices covered by a character-level entity span.
+
+        Args:
+            entity_char_start (int): The starting character offset of the entity.
+            entity_char_end (int): The ending character offset of the entity.
+            token_offsets (list[tuple[int, int]]): A list of (start_char, end_char) tuples for each token.
+            word_ids_list (list[int or None]): A list mapping token indices to word indices.
+
+        Returns:
+            frozenset[int]: A frozenset of word indices covered by the entity.
+        """
         covered_word_indices = set()
         if entity_char_start is None or entity_char_end is None: return frozenset()
         for token_idx, (tok_char_start, tok_char_end) in enumerate(token_offsets):
@@ -64,6 +119,24 @@ class CausalDataset(Dataset):
         return frozenset(covered_word_indices)
 
     def _is_span_valid_for_random_neg_sampling(self, span_coords, tokens_list, word_ids_list_for_span_check, unique_candidate_arg_spans):
+        """
+        Checks if a randomly generated token span is valid for negative sampling.
+
+        A span is considered valid if:
+        - It is within the bounds of the token list.
+        - It does not overlap with any gold entity spans.
+        - It corresponds to actual words (not just subword tokens or special tokens without word IDs).
+        - The text content of the span is not empty or purely punctuation/whitespace.
+
+        Args:
+            span_coords (tuple[int, int]): The (start_token_idx, end_token_idx) of the span.
+            tokens_list (list[str]): The list of tokens in the current sequence.
+            word_ids_list_for_span_check (list[int or None]): Word IDs for the current sequence.
+            unique_candidate_arg_spans (list[tuple[int, int]]): List of gold entity spans.
+
+        Returns:
+            bool: True if the span is valid, False otherwise.
+        """
         s_start, s_end = span_coords
         if not (0 <= s_start <= s_end < len(tokens_list)): return False
         if any(check_span_overlap_util(span_coords, gold_span) for gold_span in unique_candidate_arg_spans):
@@ -77,6 +150,36 @@ class CausalDataset(Dataset):
         return True
 
     def __getitem__(self, idx):
+        """
+        Retrieves and processes a single data sample from the dataset.
+
+        This method performs the following steps:
+        1. Tokenizes the input text.
+        2. Maps character-level entity annotations to token-level spans.
+        3. Handles entities that might span the same set of words (e.g., 'cause' and 'effect' within an 'internal_CE').
+        4. Assigns BIO (Beginning, Inside, Outside) labels for entity recognition.
+        5. Identifies relation tuples (cause_span, effect_span, relation_label).
+        6. Generates negative relation samples based on `negative_relation_rate`.
+           - Strategy 1: Pairs of existing gold entities that are not related.
+           - Strategy 2: Pairs involving one gold entity and one randomly generated valid span.
+           - Strategy 3: Pairs of two randomly generated valid spans.
+
+        Args:
+            idx (int): The index of the data sample to retrieve.
+
+        Returns:
+            dict: A dictionary containing the processed data:
+                - "input_ids": List of token IDs.
+                - "attention_mask": List of attention mask values.
+                - "bio_labels": List of BIO label IDs for each token.
+                - "cls_label": Integer (0 or 1) indicating if the sentence is causal.
+                - "relation_tuples": List of (span1, span2, relation_id) tuples.
+                - "text": The original input text.
+                - "tokenized_tokens": List of token strings.
+                - "original_entities_data": Raw entity data from the input.
+                - "final_bio_entities": Processed entity data used for BIO tagging.
+                - "original_relations_data": Raw relation data from the input.
+        """
         row = self.dataframe.iloc[idx]
         text = str(row.get('text', '')).replace(";;", " ")
         raw_entities_data = row.get('entities_parsed', [])
@@ -287,12 +390,59 @@ class CausalDataset(Dataset):
 
 class CausalDatasetCollator:
     """
-    Collator class for CausalDataset. Handles dynamic padding and tensor conversion.
+    Collator class for `CausalDataset`. Handles dynamic padding of batch elements
+    and converts them into PyTorch tensors.
+
+    This collator is responsible for taking a list of dictionaries (output of
+    `CausalDataset.__getitem__`) and preparing a batch that can be directly
+    fed into a model. It pads `input_ids`, `attention_mask`, and `bio_labels`
+    to the maximum length in the batch. It also formats relation data into
+    separate tensors.
+
+    Attributes:
+        tokenizer (AutoTokenizer): The tokenizer used for padding.
+
+    Example:
+        >>> from torch.utils.data import DataLoader
+        >>> dataset = CausalDataset(df, tokenizer_name='bert-base-uncased')
+        >>> collator = CausalDatasetCollator(dataset.tokenizer)
+        >>> dataloader = DataLoader(dataset, batch_size=2, collate_fn=collator)
+        >>> for batch in dataloader:
+        ...     print(batch['input_ids'].shape)
+        ...     print(batch['bio_labels'].shape)
+
     """
     def __init__(self, tokenizer: AutoTokenizer):
+        """
+        Initializes the CausalDatasetCollator.
+
+        Args:
+            tokenizer (AutoTokenizer): The tokenizer instance, used for its padding capabilities.
+        """
         self.tokenizer = tokenizer
     
     def __call__(self, batch: list) -> dict:
+        """
+        Processes a list of samples to form a batch.
+
+        Args:
+            batch (list[dict]): A list of dictionaries, where each dictionary
+                                represents a sample from `CausalDataset`.
+
+        Returns:
+            dict: A dictionary of tensors ready for model input:
+                - "input_ids": Padded input IDs (batch_size, seq_len).
+                - "attention_mask": Padded attention mask (batch_size, seq_len).
+                - "cls_labels": Sentence classification labels (batch_size,).
+                - "bio_labels": Padded BIO labels (batch_size, seq_len).
+                - "pair_batch" (optional): Tensor indicating the batch index for each relation pair.
+                - "cause_starts" (optional): Tensor of start token indices for cause entities in relations.
+                - "cause_ends" (optional): Tensor of end token indices for cause entities in relations.
+                - "effect_starts" (optional): Tensor of start token indices for effect entities in relations.
+                - "effect_ends" (optional): Tensor of end token indices for effect entities in relations.
+                - "rel_labels" (optional): Tensor of relation label IDs.
+                (Optional fields are present only if there are relations in the batch).
+        """
         features_for_padding, bio_labels_unpadded_batch, cls_labels_list, relation_tuples_batch = [], [], [], []
         for item in batch:
             features_for_padding.append({"input_ids": item["input_ids"], "attention_mask": item["attention_mask"]})

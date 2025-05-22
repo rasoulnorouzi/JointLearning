@@ -45,6 +45,27 @@ MAX_TOKENS: int = 512                # max new tokens to generate
 GPU_MEMORY_UTILISATION: float = 0.90 # fraction of GPU RAM vLLM may allocate
 RANDOM_SEED: int = 8642                # reproducible sampling
 SAVE_INTERVAL: int = 5000            # Save results every N samples processed
+
+# IMPORTANT: You must set your Hugging Face token in the environment variable 'HUGGING_FACE_HUB_TOKEN'.
+# You can obtain a token by signing up or logging in at https://huggingface.co, then visiting https://huggingface.co/settings/tokens
+# Copy your access token and set it in your terminal before running this script:
+#   export HUGGING_FACE_HUB_TOKEN=your_token_here  (Linux/Mac)
+#   $env:HUGGING_FACE_HUB_TOKEN="your_token_here"  (Windows PowerShell)
+# Do NOT hardcode your token in this file for security reasons.
+
+# Check for Hugging Face token and raise error if not set
+if not os.environ.get("HUGGING_FACE_HUB_TOKEN"):
+    raise EnvironmentError(
+        "HUGGING_FACE_HUB_TOKEN environment variable is not set.\n"
+        "You must obtain a token from https://huggingface.co/settings/tokens (sign up or log in if needed).\n"
+        "Copy your access token and set it in your terminal before running this script.\n\n"
+        "For example (Linux/Mac):\n"
+        "    export HUGGING_FACE_HUB_TOKEN=your_token_here\n"
+        "Or (Windows PowerShell):\n"
+        "    $env:HUGGING_FACE_HUB_TOKEN=\"your_token_here\"\n\n"
+        "Do NOT hardcode your token in the script or share it with others."
+    )
+
 # ────────────────────────────────────────────────────────────────────────────────
 
 def load_prompt_template(path: str) -> str:
@@ -157,4 +178,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-# %%
