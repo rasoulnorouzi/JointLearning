@@ -101,7 +101,7 @@ from torchcrf import CRF
 from transformers import AutoModel
 from huggingface_hub import PyTorchModelHubMixin
 
-from jointlearning.config import MODEL_CONFIG, id2label_bio, id2label_rel, INFERENCE_CONFIG, DEVICE
+from config import MODEL_CONFIG, id2label_bio, id2label_rel, INFERENCE_CONFIG, DEVICE
 
 # ---------------------------------------------------------------------------
 # Type aliases & label maps
@@ -236,6 +236,8 @@ class JointCausalModel(nn.Module, PyTorchModelHubMixin):
         if bio_labels is not None:
             if self.use_crf:
                 active_mask = attention_mask.bool() & (bio_labels != -100)
+                # Ensure the first token's mask is always True
+                active_mask[:, 0] = True
                 safe_lab    = bio_labels.clone()
                 safe_lab[safe_lab == -100] = label2id_bio["O"]
                 tag_loss = -self.crf(emissions, safe_lab, mask=active_mask, reduction="mean")  # type: ignore[arg-type]
