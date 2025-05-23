@@ -1,133 +1,154 @@
 import torch
+import torch.nn as nn
 from tqdm import tqdm
 from sklearn.metrics import classification_report
+from typing import Dict, List, Tuple # Added for type hinting
 
-def evaluate_model(model,
-                   dataloader,
-                   loss_fns: tuple, # (cls_loss_fn, bio_loss_fn, rel_loss_fn)
-                   device,
-                   id2label_cls: dict,
-                   id2label_bio: dict,
-                   id2label_rel: dict) -> dict:
+# Define a type alias for clarity, assuming JointCausalModel is the class
+# If not available, we use nn.Module. You might need to import your model.
+# from .crf_model import JointCausalModel
+# ModelType = JointCausalModel
+ModelType = nn.Module # Use generic nn.Module if import is not feasible here
+
+
+def evaluate_model(
+    model: ModelType,
+    dataloader: torch.utils.data.DataLoader,
+    device: torch.device,
+    id2label_cls: dict,
+    id2label_bio: dict,
+    id2label_rel: dict,
+) -> dict:
     """
-    Evaluates the multitask model on a given dataset.
+    Evaluates the multitask model on a given dataset, focusing on metrics.
+
+    This version removes loss calculation, expecting it to be handled
+    during the training loop. It correctly handles both CRF and Softmax
+    BIO predictions for metric calculation by:
+    1.  Expecting a dictionary output from the model.
+    2.  Using `model.crf.decode()` if `use_crf` is True.
+    3.  Using `torch.argmax()` if `use_crf` is False.
 
     Args:
-        model: The PyTorch model to evaluate.
+        model: The PyTorch model (JointCausalModel) to evaluate.
+               It's expected to have a `use_crf` attribute and potentially
+               a `crf` attribute if `use_crf` is True.
         dataloader: DataLoader for the validation or test set.
-        loss_fns: A tuple containing the loss functions for CLS, BIO, and REL tasks.
         device: The device (CPU or CUDA) to run evaluation on.
         id2label_cls: Mapping from class ID to class name for classification task.
         id2label_bio: Mapping from BIO ID to BIO tag name for BIO task.
         id2label_rel: Mapping from relation ID to relation type name for relation task.
 
     Returns:
-        A dictionary containing evaluation metrics for each task and overall scores.
+        A dictionary containing evaluation metrics (F1, Precision, Recall)
+        for each task and an overall average F1 score.
     """
     model.eval()  # Set the model to evaluation mode
-    total_val_loss = 0.0
-    total_cls_loss = 0.0
-    total_bio_loss = 0.0
-    total_rel_loss = 0.0
 
+    # Lists to store predictions and ground truth labels for all batches
     all_cls_preds, all_cls_labels = [], []
-    all_bio_preds, all_bio_labels = [], [] # For token-level BIO evaluation
+    all_bio_preds, all_bio_labels = [], []  # For token-level BIO evaluation
     all_rel_preds, all_rel_labels = [], []
 
-    cls_loss_fn, bio_loss_fn, rel_loss_fn = loss_fns
-    
     val_pbar = tqdm(dataloader, desc="Evaluating", leave=False)
-    
-    with torch.no_grad():  # Disable gradient calculations
-        for batch_idx, batch in enumerate(val_pbar):
-            # Move batch to device
-            input_ids = batch['input_ids'].to(device)
-            attention_mask = batch['attention_mask'].to(device)
-            cls_labels_gold = batch['cls_labels'].to(device)
-            bio_labels_gold = batch['bio_labels'].to(device) # (batch_size, seq_len)
 
-            pair_batch_data = batch['pair_batch'].to(device) if batch['pair_batch'] is not None else None
-            cause_starts_data = batch['cause_starts'].to(device) if batch['cause_starts'] is not None else None
-            cause_ends_data = batch['cause_ends'].to(device) if batch['cause_ends'] is not None else None
-            effect_starts_data = batch['effect_starts'].to(device) if batch['effect_starts'] is not None else None
-            effect_ends_data = batch['effect_ends'].to(device) if batch['effect_ends'] is not None else None
-            rel_labels_gold = batch['rel_labels'].to(device) if batch['rel_labels'] is not None else None
+    # Disable gradient calculations during evaluation
+    with torch.no_grad():
+        for batch in val_pbar:
+            # Move batch data to the designated device
+            input_ids = batch["input_ids"].to(device)
+            attention_mask = batch["attention_mask"].to(device)
+            cls_labels_gold = batch["cls_labels"].to(device)
+            bio_labels_gold = batch["bio_labels"].to(device)
 
-            # Forward pass
-            cls_logits, bio_logits, rel_logits = model(
+            # Handle optional relation data (might not be present in every batch)
+            pair_batch = batch.get("pair_batch")
+            cause_starts = batch.get("cause_starts")
+            cause_ends = batch.get("cause_ends")
+            effect_starts = batch.get("effect_starts")
+            effect_ends = batch.get("effect_ends")
+            rel_labels_gold = batch.get("rel_labels")
+
+            # Move optional data to device if it exists
+            pair_batch = pair_batch.to(device) if pair_batch is not None else None
+            cause_starts = cause_starts.to(device) if cause_starts is not None else None
+            cause_ends = cause_ends.to(device) if cause_ends is not None else None
+            effect_starts = effect_starts.to(device) if effect_starts is not None else None
+            effect_ends = effect_ends.to(device) if effect_ends is not None else None
+            rel_labels_gold = rel_labels_gold.to(device) if rel_labels_gold is not None else None
+
+            # --- MODIFIED: Handle Dictionary Output ---
+            # Perform forward pass and get the output dictionary
+            outputs = model(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
-                pair_batch=pair_batch_data,
-                cause_starts=cause_starts_data,
-                cause_ends=cause_ends_data,
-                effect_starts=effect_starts_data,
-                effect_ends=effect_ends_data
+                bio_labels=bio_labels_gold,  # Pass labels in case model uses them
+                pair_batch=pair_batch,
+                cause_starts=cause_starts,
+                cause_ends=cause_ends,
+                effect_starts=effect_starts,
+                effect_ends=effect_ends,
             )
 
-            # --- Calculate and accumulate loss ---
-            loss_cls = cls_loss_fn(cls_logits, cls_labels_gold)
-            # Reshape for CrossEntropyLoss: (N, C) for logits, (N) for labels
-            loss_bio = bio_loss_fn(bio_logits.view(-1, model.num_bio_labels), bio_labels_gold.view(-1))
-            
-            loss_rel = torch.tensor(0.0).to(device)
-            if rel_logits is not None and rel_labels_gold is not None and rel_logits.shape[0] > 0:
-                loss_rel = rel_loss_fn(rel_logits, rel_labels_gold)
-            
-            # Track individual losses
-            total_cls_loss += loss_cls.item()
-            total_bio_loss += loss_bio.item()
-            total_rel_loss += loss_rel.item()
-            
-            # Combine losses
-            current_batch_loss = loss_cls + loss_bio + loss_rel
-            total_val_loss += current_batch_loss.item()
-            
-            # Update progress bar with current loss values
-            if batch_idx > 0:
-                val_pbar.set_postfix(
-                    total=f"{total_val_loss / (batch_idx + 1):.4f}", 
-                    cls=f"{total_cls_loss / (batch_idx + 1):.4f}", 
-                    bio=f"{total_bio_loss / (batch_idx + 1):.4f}", 
-                    rel=f"{total_rel_loss / (batch_idx + 1):.4f}"
-                )
+            # Extract logits/emissions from the dictionary
+            cls_logits = outputs["cls_logits"]
+            bio_emissions = outputs["bio_emissions"]
+            rel_logits = outputs["rel_logits"]
+
+            # --- LOSS CALCULATION REMOVED ---
 
             # --- Accumulate predictions and labels for metrics ---
+
             # Task 1: Classification
             all_cls_preds.extend(torch.argmax(cls_logits, dim=-1).cpu().numpy())
             all_cls_labels.extend(cls_labels_gold.cpu().numpy())
 
             # Task 2: BIO Prediction (Token-level BIO)
-            bio_preds_batch = torch.argmax(bio_logits, dim=-1) # (batch_size, seq_len)
-            for i in range(bio_labels_gold.shape[0]): # Iterate over each sequence in the batch
-                # Only evaluate on non атмосфера(-100) labels
-                active_indices = (bio_labels_gold[i] != -100)
-                preds_for_seq = bio_preds_batch[i][active_indices].cpu().numpy()
-                labels_for_seq = bio_labels_gold[i][active_indices].cpu().numpy()
-                all_bio_preds.extend(preds_for_seq)
-                all_bio_labels.extend(labels_for_seq)
+            # Create the active mask to ignore padding and special tokens (-100)
+            active_mask = attention_mask.bool() & (bio_labels_gold != -100)
+
+            # --- MODIFIED: Handle CRF/Softmax BIO Prediction ---
+            if hasattr(model, "use_crf") and model.use_crf and hasattr(model, "crf") and model.crf is not None:
+                # CRF Decoding: Use the CRF layer's decode method
+                # It returns the best tag sequence (List[List[int]])
+                bio_preds_batch_list = model.crf.decode(bio_emissions, mask=attention_mask.bool()) # Use full attention mask for CRF decode
+
+                # Process each sequence in the batch
+                for i in range(len(bio_preds_batch_list)):
+                    # Get CRF predictions (already masked)
+                    preds_for_seq = bio_preds_batch_list[i]
+                    # Get gold labels, applying the active_mask
+                    labels_for_seq = bio_labels_gold[i][active_mask[i]].cpu().numpy()
+
+                    # Ensure lengths match before extending (safety check)
+                    min_len = min(len(preds_for_seq), len(labels_for_seq))
+                    all_bio_preds.extend(preds_for_seq[:min_len])
+                    all_bio_labels.extend(labels_for_seq[:min_len])
+            else:
+                # Softmax Prediction: Use argmax on emissions
+                bio_preds_batch = torch.argmax(bio_emissions, dim=-1)
+                for i in range(bio_labels_gold.shape[0]):
+                    # Apply active_mask to both predictions and labels
+                    active_indices = active_mask[i]
+                    preds_for_seq = bio_preds_batch[i][active_indices].cpu().numpy()
+                    labels_for_seq = bio_labels_gold[i][active_indices].cpu().numpy()
+                    all_bio_preds.extend(preds_for_seq)
+                    all_bio_labels.extend(labels_for_seq)
+
 
             # Task 3: Relation Prediction
             if rel_logits is not None and rel_labels_gold is not None and rel_logits.shape[0] > 0:
                 all_rel_preds.extend(torch.argmax(rel_logits, dim=-1).cpu().numpy())
-                all_rel_labels.extend(rel_labels_gold.cpu().numpy())    # Calculate average losses
-    avg_val_loss = total_val_loss / len(dataloader) if len(dataloader) > 0 else 0.0
-    avg_cls_loss = total_cls_loss / len(dataloader) if len(dataloader) > 0 else 0.0
-    avg_bio_loss = total_bio_loss / len(dataloader) if len(dataloader) > 0 else 0.0
-    avg_rel_loss = total_rel_loss / len(dataloader) if len(dataloader) > 0 else 0.0
-    
-    # Store all losses in metrics dictionary
-    eval_metrics = {
-        "loss": avg_val_loss,
-        "cls_loss": avg_cls_loss,
-        "bio_loss": avg_bio_loss,
-        "rel_loss": avg_rel_loss
-    }
+                all_rel_labels.extend(rel_labels_gold.cpu().numpy())
 
-    # --- Calculate and store detailed metrics using sklearn.metrics.classification_report ---
+    # --- Calculate and store detailed metrics using sklearn ---
+    eval_metrics = {}
+
     # Task 1: Classification Metrics
-    if all_cls_labels: # Ensure there's something to evaluate
-        cls_target_names = [id2label_cls.get(i, f"CLS_Label_{i}") for i in sorted(list(set(all_cls_labels)))]
-        cls_labels_for_report = sorted(list(set(all_cls_labels)))
+    if all_cls_labels:
+        cls_labels_set = set(all_cls_labels) | set(all_cls_preds)
+        cls_target_names = [id2label_cls.get(i, f"CLS_Label_{i}") for i in sorted(list(cls_labels_set))]
+        cls_labels_for_report = sorted(list(cls_labels_set))
         cls_report = classification_report(all_cls_labels, all_cls_preds, labels=cls_labels_for_report, target_names=cls_target_names, output_dict=True, zero_division=0)
         eval_metrics["task_cls"] = cls_report
         f1_cls_macro = cls_report.get("macro avg", {}).get("f1-score", 0.0)
@@ -135,10 +156,10 @@ def evaluate_model(model,
         eval_metrics["task_cls"] = {"message": "No classification labels to evaluate."}
         f1_cls_macro = 0.0
 
-    # Task 2: BIO Prediction Metrics (Token-level BIO)
-    if all_bio_labels: # Ensure there's something to evaluate
-        # Get unique labels present in the gold data for spans, excluding any potential -100
-        bio_labels_for_report = sorted([l for l in list(set(all_bio_labels)) if l != -100])
+    # Task 2: BIO Prediction Metrics
+    if all_bio_labels:
+        bio_labels_set = set(all_bio_labels) | set(all_bio_preds)
+        bio_labels_for_report = sorted([l for l in list(bio_labels_set) if l != -100])
         bio_target_names = [id2label_bio.get(i, f"BIO_Label_{i}") for i in bio_labels_for_report]
         bio_report = classification_report(all_bio_labels, all_bio_preds, labels=bio_labels_for_report, target_names=bio_target_names, output_dict=True, zero_division=0)
         eval_metrics["task_bio"] = bio_report
@@ -146,10 +167,11 @@ def evaluate_model(model,
     else:
         eval_metrics["task_bio"] = {"message": "No BIO labels to evaluate."}
         f1_bio_macro = 0.0
-        
+
     # Task 3: Relation Prediction Metrics
-    if all_rel_labels: # Ensure there's something to evaluate
-        rel_labels_for_report = sorted(list(set(all_rel_labels)))
+    if all_rel_labels:
+        rel_labels_set = set(all_rel_labels) | set(all_rel_preds)
+        rel_labels_for_report = sorted(list(rel_labels_set))
         rel_target_names = [id2label_rel.get(i, f"REL_Label_{i}") for i in rel_labels_for_report]
         rel_report = classification_report(all_rel_labels, all_rel_preds, labels=rel_labels_for_report, target_names=rel_target_names, output_dict=True, zero_division=0)
         eval_metrics["task_relation"] = rel_report
@@ -158,12 +180,9 @@ def evaluate_model(model,
         eval_metrics["task_relation"] = {"message": "No relation labels to evaluate."}
         f1_rel_macro = 0.0
 
-    # Calculate overall average F1 (simple average of macro F1s)
-    num_tasks_evaluated = 0
-    if all_cls_labels: num_tasks_evaluated += 1
-    if all_bio_labels: num_tasks_evaluated += 1
-    if all_rel_labels: num_tasks_evaluated += 1
-    
+    # Calculate overall average F1
+    num_tasks_evaluated = sum([1 for report in [eval_metrics["task_cls"], eval_metrics["task_bio"], eval_metrics["task_relation"]] if "macro avg" in report])
+
     if num_tasks_evaluated > 0:
         eval_metrics["overall_avg_f1"] = (f1_cls_macro + f1_bio_macro + f1_rel_macro) / num_tasks_evaluated
     else:
@@ -171,41 +190,46 @@ def evaluate_model(model,
 
     return eval_metrics
 
-def print_eval_report(epoch_num: int,
-                      num_epochs: int,
-                      avg_train_loss: float,
-                      eval_results: dict,
-                      best_overall_f1: float,
-                      patience_counter: int,
-                      patience_epochs: int,
-                      new_best_saved: bool):
+
+def print_eval_report(
+    epoch_num: int,
+    num_epochs: int,
+    avg_train_loss: float,
+    avg_val_loss: float, # MODIFIED: Added to accept validation loss
+    eval_results: dict,
+    best_overall_f1: float,
+    patience_counter: int,
+    patience_epochs: int,
+    new_best_saved: bool,
+):
     """
-    Prints a visually structured report of the evaluation results,
-    including per-tag details for BIO and relation tasks.
+    Prints a visually structured report of the evaluation results.
+
+    MODIFIED: This version removes the detailed per-task loss breakdown,
+    as loss is now calculated externally. It accepts and displays the
+    overall training and validation loss passed as arguments.
     """
-    header_line = "=" * 80  # Adjusted width for potentially more details
+    header_line = "=" * 80
     section_line = "-" * 80
 
     print(f"\n{header_line}")
     print(f"Epoch {epoch_num}/{num_epochs} Summary")
     print(section_line)
+    # MODIFIED: Display losses passed as arguments
     print(f"  Average Training Loss:           {avg_train_loss:.4f}")
-    print(f"  Validation Loss (Total):         {eval_results.get('loss', float('nan')):.4f}")
-    print(f"    - Classification Loss:         {eval_results.get('cls_loss', float('nan')):.4f}")
-    print(f"    - BIO Loss:                    {eval_results.get('bio_loss', float('nan')):.4f}")
-    print(f"    - Relation Loss:               {eval_results.get('rel_loss', float('nan')):.4f}")
+    print(f"  Average Validation Loss:         {avg_val_loss:.4f}")
     print(f"  Overall Validation Avg F1 (Macro): {eval_results.get('overall_avg_f1', 0.0):.4f}")
     print(section_line)
     print("Task-Specific Validation Performance:")
 
-    # Task 1: Classification
+    # Task 1: Classification (Reporting remains the same)
     cls_metrics_dict = eval_results.get("task_cls", {})
     print("\n  [Task 1: Sentence Classification]")
     if isinstance(cls_metrics_dict, dict) and "macro avg" in cls_metrics_dict:
         macro_avg_cls = cls_metrics_dict["macro avg"]
         accuracy_cls = cls_metrics_dict.get("accuracy", "N/A")
         accuracy_cls_str = f"{accuracy_cls:.4f}" if isinstance(accuracy_cls, float) else accuracy_cls
-        
+
         print(f"    Macro F1-Score:  {macro_avg_cls.get('f1-score', 0.0):.4f}")
         print(f"    Macro Precision: {macro_avg_cls.get('precision', 0.0):.4f}")
         print(f"    Macro Recall:    {macro_avg_cls.get('recall', 0.0):.4f}")
@@ -213,11 +237,11 @@ def print_eval_report(epoch_num: int,
         print("    Per-class details:")
         for class_name, metrics in cls_metrics_dict.items():
             if class_name not in ["accuracy", "macro avg", "weighted avg"] and isinstance(metrics, dict):
-                 print(f"      {class_name:<12}: F1={metrics.get('f1-score',0.0):.4f} (P={metrics.get('precision',0.0):.4f}, R={metrics.get('recall',0.0):.4f}, Support={metrics.get('support',0)})")
+                print(f"      {class_name:<12}: F1={metrics.get('f1-score',0.0):.4f} (P={metrics.get('precision',0.0):.4f}, R={metrics.get('recall',0.0):.4f}, Support={metrics.get('support',0)})")
     else:
         print(f"    Metrics not available or in unexpected format. Message: {cls_metrics_dict.get('message', 'N/A') if isinstance(cls_metrics_dict, dict) else cls_metrics_dict}")
 
-    # Task 2: BIO (Token-BIO)
+    # Task 2: BIO (Reporting remains the same)
     bio_metrics_dict = eval_results.get("task_bio", {})
     print("\n  [Task 2: BIO Prediction (Token-BIO)]")
     if isinstance(bio_metrics_dict, dict) and "macro avg" in bio_metrics_dict:
@@ -228,12 +252,11 @@ def print_eval_report(epoch_num: int,
         print("    Per-tag details (P=Precision, R=Recall, F1=F1-Score, S=Support):")
         for tag_name, metrics in bio_metrics_dict.items():
             if tag_name not in ["accuracy", "macro avg", "weighted avg"] and isinstance(metrics, dict):
-                # Adjust column width if necessary, e.g., tag_name:<8
                 print(f"      {tag_name:<10}: F1={metrics.get('f1-score',0.0):.3f} (P={metrics.get('precision',0.0):.3f}, R={metrics.get('recall',0.0):.3f}, S={metrics.get('support',0)})")
     else:
         print(f"    Metrics not available or in unexpected format. Message: {bio_metrics_dict.get('message', 'N/A') if isinstance(bio_metrics_dict, dict) else bio_metrics_dict}")
 
-    # Task 3: Relation
+    # Task 3: Relation (Reporting remains the same)
     rel_metrics_dict = eval_results.get("task_relation", {})
     print("\n  [Task 3: Relation Prediction]")
     if isinstance(rel_metrics_dict, dict) and "macro avg" in rel_metrics_dict:
@@ -244,7 +267,6 @@ def print_eval_report(epoch_num: int,
         print("    Per-relation type details (P=Precision, R=Recall, F1=F1-Score, S=Support):")
         for rel_type_name, metrics in rel_metrics_dict.items():
             if rel_type_name not in ["accuracy", "macro avg", "weighted avg"] and isinstance(metrics, dict):
-                # Adjust column width if necessary, e.g., rel_type_name:<15
                 print(f"      {rel_type_name:<12}: F1={metrics.get('f1-score',0.0):.3f} (P={metrics.get('precision',0.0):.3f}, R={metrics.get('recall',0.0):.3f}, S={metrics.get('support',0)})")
     else:
         print(f"    Metrics not available or in unexpected format. Message: {rel_metrics_dict.get('message', 'N/A') if isinstance(rel_metrics_dict, dict) else rel_metrics_dict}")

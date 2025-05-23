@@ -7,6 +7,9 @@ import torch
 # Device configuration
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+# Seed for reproducibility
+SEED = 8642
+
 # Model configuration
 MODEL_CONFIG = {
     "encoder_name": "bert-base-uncased",  # Default encoder

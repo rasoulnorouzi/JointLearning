@@ -8,19 +8,19 @@ import re # For checking punctuation in random spans
 
 from config import (
     DATASET_CONFIG,
-    id2label_bio,
     label2id_bio,
     entity_label_to_bio_prefix,
-    id2label_rel,
     label2id_rel,
-    id2label_cls,
-    label2id_cls,
     POSITIVE_RELATION_TYPE_TO_ID,
     NEGATIVE_SAMPLE_REL_ID,
-    MODEL_CONFIG
+    MODEL_CONFIG,
+    SEED
 )
 
 ignore_id = -100
+
+# Set the seed for reproducibility
+random.seed(SEED)
 
 #  Helper function to check span overlap
 def check_span_overlap_util(span1, span2):

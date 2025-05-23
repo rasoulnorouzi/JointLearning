@@ -1,5 +1,5 @@
 # %%
-from crf_model import JointCausalModel
+from jointlearning.model import JointCausalModel
 # import dataloader from pytorch
 from torch.utils.data import DataLoader
 from dataset_collator import CausalDataset, CausalDatasetCollator

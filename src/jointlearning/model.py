@@ -1,94 +1,129 @@
-"""
-Joint causal extraction model + inference predictor (HF‑*friendly* mix‑in).
+"""Joint Causal Extraction Model (switchable CRF / soft‑max)
+============================================================================
 
-This file keeps the **exact same forward logic** you wrote, but mixes in
-`PyTorchModelHubMixin` so you still get `save_pretrained`, `from_pretrained`,
-and `push_to_hub` without rewriting everything around a `PreTrainedModel`.
+A *single* PyTorch module that can be instantiated in two modes:
 
-Dependencies
-------------
-• transformers ≥ 4.40  
-• torch ≥ 2.1  
-• huggingface_hub ≥ 0.20
+* **CRF mode** (`use_crf=True`, default):  BIO tagging is decoded by a linear–
+  chain CRF and trained with negative log‑likelihood (no class weights).
+* **Soft‑max mode** (`use_crf=False`):  BIO tagging is trained with standard
+  per‑token cross‑entropy; you can pass **class weights** for the rare "B-CE" /
+  "I-CE" tags, which is impossible with `torchcrf`.
 
-Label utilities expected in your project (import wherever appropriate):
+```python
+>>> model = JointCausalModel(use_crf=False)        # soft‑max baseline
+>>> crf_model = JointCausalModel(use_crf=True)     # CRF variant
 ```
-from config import (
-    label2id_span,
-    id2label_span,
-    id2label_rel,
-    label2id_cls,
-)
-```
-"""
 
+The flag is saved in `config.json`, so `from_pretrained()` restores the right
+variant automatically.
+
+---------------------------------------------------------------------------
+Usage overview
+---------------------------------------------------------------------------
+
+**Training**
+~~~~~~~~~~~~
+(Training code example omitted for brevity, see previous versions)
+---------------------------------------------------------------------------
+Implementation
+---------------------------------------------------------------------------
+"""
 from __future__ import annotations
-
-from typing import List, Dict, Tuple
-import itertools
-
+from typing import Dict, Tuple, Optional, Any 
 import torch
 import torch.nn as nn
-from transformers import AutoModel, AutoTokenizer
+from torchcrf import CRF 
+from transformers import AutoModel
 from huggingface_hub import PyTorchModelHubMixin
 
-from .config import DEVICE, MODEL_CONFIG
+# Attempt to import from local config, provide fallbacks for standalone execution/testing
+try:
+    from .config import MODEL_CONFIG, id2label_bio, id2label_rel
+except ImportError:
+    print("Warning: Could not import from .config. Using fallback configurations for crf_model.py.")
+    MODEL_CONFIG = {
+        "encoder_name": "bert-base-uncased",
+        "num_cls_labels": 2,
+        "num_bio_labels": 7, 
+        "num_rel_labels": 2, 
+        "dropout": 0.1,
+    }
+    id2label_bio = {
+        0: "O", 1: "B-C", 2: "I-C", 3: "B-E", 4: "I-E", 5: "B-CE", 6: "I-CE"
+    }
+    id2label_rel = {
+        0: "NoRel", 1: "Rel_CE"
+    }
+    INFERENCE_CONFIG = {"cls_threshold": 0.5}
+    DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# --------------------------------------------------------------------------- #
-# Type aliases
-# --------------------------------------------------------------------------- #
-Span = Tuple[int, int]            # (start_idx, end_idx) inclusive
-Relation = Tuple[Span, Span, int] # (cause_span, effect_span, label_id)
 
-# --------------------------------------------------------------------------- #
-# Neural network (unchanged forward, HF mix‑in added)
-# --------------------------------------------------------------------------- #
+# ---------------------------------------------------------------------------
+# Type aliases & label maps
+# ---------------------------------------------------------------------------
+Span = Tuple[int, int]  # inclusive indices (token indices)
+label2id_bio = {v: k for k, v in id2label_bio.items()}
+label2id_rel = {v: k for k, v in id2label_rel.items()}
+
+
+# ---------------------------------------------------------------------------
+# Main module
+# ---------------------------------------------------------------------------
 class JointCausalModel(nn.Module, PyTorchModelHubMixin):
-    """Joint model with three heads + HF Hub mix‑in.
+    """Encoder + three heads with **optional CRF** BIO decoder.
 
-    * Inherits from **`nn.Module`** to keep training code untouched.
-    * Inherits from **`PyTorchModelHubMixin`** to gain
-      `save_pretrained`, `from_pretrained`, and `push_to_hub` helpers.
-    * All computational logic (encoder → heads) is identical to your original
-      implementation; only minimal bookkeeping attributes are added so the
-      mix‑in can rebuild the model later.
+    This model integrates a pre-trained transformer encoder with three distinct
+    heads for:
+    1. Classification (cls_head): Predicts a global label for the input.
+    2. BIO tagging (bio_head): Performs sequence tagging using BIO scheme.
+       Can operate with a CRF layer or standard softmax.
+    3. Relation extraction (rel_head): Identifies relations between entities
+       detected by the BIO tagging head.
     """
 
-    # ------------------------------------------------------------------ #
-    # Constructor
-    # ------------------------------------------------------------------ #
+    # ------------------------------------------------------------------
+    # constructor
+    # ------------------------------------------------------------------
     def __init__(
         self,
+        *,
         encoder_name: str = MODEL_CONFIG["encoder_name"],
         num_cls_labels: int = MODEL_CONFIG["num_cls_labels"],
         num_bio_labels: int = MODEL_CONFIG["num_bio_labels"],
         num_rel_labels: int = MODEL_CONFIG["num_rel_labels"],
         dropout: float = MODEL_CONFIG["dropout"],
+        use_crf: bool = True,
     ) -> None:
+        """Initializes the JointCausalModel.
+
+        Args:
+            encoder_name: Name of the pre-trained transformer model to use
+                (e.g., "bert-base-uncased").
+            num_cls_labels: Number of labels for the classification task.
+            num_bio_labels: Number of labels for the BIO tagging task.
+            num_rel_labels: Number of labels for the relation extraction task.
+            dropout: Dropout rate for regularization.
+            use_crf: If True, a CRF layer is used for BIO tagging. Otherwise,
+                a softmax layer is used.
+        """
         super().__init__()
 
-        # ---------- store hyper‑params so we can write them to config.json
         self.encoder_name = encoder_name
         self.num_cls_labels = num_cls_labels
         self.num_bio_labels = num_bio_labels
         self.num_rel_labels = num_rel_labels
         self.dropout_rate = dropout
-        # --------------------------------------------------------------
-
-        # ---------- backbone + heads (unchanged) ----------------------
+        self.use_crf = use_crf
         self.enc = AutoModel.from_pretrained(encoder_name)
         self.hidden_size = self.enc.config.hidden_size
-
         self.dropout = nn.Dropout(dropout)
         self.layer_norm = nn.LayerNorm(self.hidden_size)
-
         self.cls_head = nn.Sequential(
             nn.Linear(self.hidden_size, self.hidden_size // 2),
             nn.ReLU(),
             nn.Dropout(dropout),
             nn.Linear(self.hidden_size // 2, num_cls_labels),
         )
-
         self.bio_head = nn.Sequential(
             nn.Linear(self.hidden_size, self.hidden_size),
             nn.ReLU(),
@@ -98,9 +133,9 @@ class JointCausalModel(nn.Module, PyTorchModelHubMixin):
             nn.Dropout(dropout),
             nn.Linear(self.hidden_size // 2, num_bio_labels),
         )
-
+        self.crf: CRF | None = CRF(num_bio_labels, batch_first=True) if use_crf else None
         self.rel_head = nn.Sequential(
-            nn.Linear(self.hidden_size * 2, self.hidden_size),
+            nn.Linear(self.hidden_size * 2, self.hidden_size), 
             nn.ReLU(),
             nn.Dropout(dropout),
             nn.Linear(self.hidden_size, self.hidden_size // 2),
@@ -108,157 +143,134 @@ class JointCausalModel(nn.Module, PyTorchModelHubMixin):
             nn.Dropout(dropout),
             nn.Linear(self.hidden_size // 2, num_rel_labels),
         )
+        self._init_new_layer_weights()
 
-        self._init_weights()
-
-    # ------------------------------------------------------------------ #
-    # Required for PyTorchModelHubMixin
-    # ------------------------------------------------------------------ #
     def get_config_dict(self) -> Dict:
-        """Return *serialisable* hyper‑parameters for config.json."""
-        return dict(
-            encoder_name=self.encoder_name,
-            num_cls_labels=self.num_cls_labels,
-            num_bio_labels=self.num_bio_labels,
-            num_rel_labels=self.num_rel_labels,
-            dropout=self.dropout_rate,
-        )
+        """Returns the model's configuration as a dictionary."""
+        return {
+            "encoder_name": self.encoder_name,
+            "num_cls_labels": self.num_cls_labels,
+            "num_bio_labels": self.num_bio_labels,
+            "num_rel_labels": self.num_rel_labels,
+            "dropout": self.dropout_rate,
+            "use_crf": self.use_crf,
+        }
 
     @classmethod
     def from_config_dict(cls, config: Dict) -> "JointCausalModel":
-        """Rebuild a model from config.json (used by `from_pretrained`)."""
+        """Creates a JointCausalModel instance from a configuration dictionary."""
         return cls(**config)
 
-    # ------------------------------------------------------------------ #
-    # Helper: weight initialisation (unchanged)
-    # ------------------------------------------------------------------ #
-    def _init_weights(self) -> None:
-        for module in (self.cls_head, self.bio_head, self.rel_head):
-            for layer in module:
-                if isinstance(layer, nn.Linear):
-                    nn.init.xavier_uniform_(layer.weight)
-                    if layer.bias is not None:
-                        nn.init.zeros_(layer.bias)
+    def _init_new_layer_weights(self):
+        """Initializes the weights of the newly added linear layers.
 
-    # ------------------------------------------------------------------ #
-    # Shared encoder pass (unchanged)
-    # ------------------------------------------------------------------ #
+        Uses Xavier uniform initialization for weights and zeros for biases.
+        """
+        for mod in [self.cls_head, self.bio_head, self.rel_head]:
+            for sub_module in mod.modules():
+                if isinstance(sub_module, nn.Linear):
+                    nn.init.xavier_uniform_(sub_module.weight)
+                    if sub_module.bias is not None:
+                        nn.init.zeros_(sub_module.bias)
+
     def encode(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
-        """One encoder forward pass + dropout + LN."""
-        h = self.enc(input_ids=input_ids, attention_mask=attention_mask).last_hidden_state
-        h = self.dropout(h)
-        h = self.layer_norm(h)
-        return h
+        """Encodes the input using the transformer model.
 
-    # ------------------------------------------------------------------ #
-    # Training/validation forward (unchanged)
-    # ------------------------------------------------------------------ #
+        Args:
+            input_ids: Tensor of input token IDs.
+            attention_mask: Tensor indicating which tokens to attend to.
+
+        Returns:
+            Tensor of hidden states from the encoder, passed through dropout
+            and layer normalization.
+        """
+        hidden_states = self.enc(input_ids=input_ids, attention_mask=attention_mask).last_hidden_state
+        return self.layer_norm(self.dropout(hidden_states))
+
     def forward(
         self,
         input_ids: torch.Tensor,
         attention_mask: torch.Tensor,
+        *,
+        bio_labels: torch.Tensor | None = None, 
         pair_batch: torch.Tensor | None = None,
         cause_starts: torch.Tensor | None = None,
         cause_ends: torch.Tensor | None = None,
         effect_starts: torch.Tensor | None = None,
         effect_ends: torch.Tensor | None = None,
     ) -> Dict[str, torch.Tensor | None]:
-        """Compute logits for all three tasks."""
+        """Performs a forward pass through the model.
+
+        Args:
+            input_ids: Tensor of input token IDs.
+            attention_mask: Tensor indicating which tokens to attend to.
+            bio_labels: Optional tensor of BIO labels for training.
+            pair_batch: Optional tensor indicating which hidden states to use
+                for relation extraction.
+            cause_starts: Optional tensor of start indices for cause spans.
+            cause_ends: Optional tensor of end indices for cause spans.
+            effect_starts: Optional tensor of start indices for effect spans.
+            effect_ends: Optional tensor of end indices for effect spans.
+
+        Returns:
+            A dictionary containing:
+                - "cls_logits": Logits for the classification task.
+                - "bio_emissions": Emissions from the BIO tagging head.
+                - "tag_loss": Loss for the BIO tagging task (if bio_labels provided).
+                - "rel_logits": Logits for the relation extraction task (if
+                  relation extraction inputs provided).
+        """
+        # Encode input
         hidden = self.encode(input_ids, attention_mask)
 
-        outputs = {
-            "cls_logits": self.cls_head(hidden[:, 0]),
-            "bio_logits": self.bio_head(hidden),
-            "rel_logits": None,
+        # Classification head
+        cls_logits = self.cls_head(hidden[:, 0])  # Use [CLS] token representation
+
+        # BIO tagging head
+        emissions  = self.bio_head(hidden)
+        tag_loss: Optional[torch.Tensor] = None
+
+        # Calculate BIO tagging loss if labels are provided
+        if bio_labels is not None and self.use_crf and self.crf is not None:
+            # CRF loss calculation
+            active_mask = attention_mask.bool() & (bio_labels != -100) # Ignore padding and special tokens
+            if active_mask.shape[1] > 0 : # Ensure sequence length is greater than 0
+                 active_mask[:, 0] = attention_mask[:, 0].bool() # Ensure [CLS] token is handled correctly in mask
+            safe_bio_labels = bio_labels.clone()
+            safe_bio_labels[safe_bio_labels == -100] = label2id_bio.get("O", 0) # Replace -100 with "O" label for CRF
+            if torch.any(active_mask): # Only compute loss if there are active tokens
+                tag_loss = -self.crf(emissions, safe_bio_labels, mask=active_mask, reduction="mean")
+            else: # Handle cases with no active tokens (e.g., all padding)
+                tag_loss = torch.tensor(0.0, device=emissions.device)
+        elif bio_labels is not None and not self.use_crf:
+            # Softmax loss (typically handled by the training loop's loss function, e.g., CrossEntropyLoss)
+            # Here, we initialize it to 0.0 as a placeholder if not using CRF.
+            # The actual loss calculation for softmax would compare emissions with bio_labels.
+            tag_loss = torch.tensor(0.0, device=emissions.device)
+
+        # Relation extraction head
+        rel_logits: torch.Tensor | None = None
+        if pair_batch is not None and cause_starts is not None and cause_ends is not None \
+           and effect_starts is not None and effect_ends is not None:
+            # Select hidden states corresponding to the pairs for relation extraction
+            bio_states_for_rel = hidden[pair_batch] 
+            seq_len_rel = bio_states_for_rel.size(1)
+            pos_rel = torch.arange(seq_len_rel, device=bio_states_for_rel.device).unsqueeze(0)
+
+            # Create masks for cause and effect spans
+            c_mask = ((cause_starts.unsqueeze(1) <= pos_rel) & (pos_rel <= cause_ends.unsqueeze(1))).unsqueeze(2)
+            e_mask = ((effect_starts.unsqueeze(1) <= pos_rel) & (pos_rel <= effect_ends.unsqueeze(1))).unsqueeze(2)
+
+            # Compute mean-pooled representations for cause and effect spans
+            c_vec = (bio_states_for_rel * c_mask).sum(1) / c_mask.sum(1).clamp(min=1) # Average pooling, clamp to avoid div by zero
+            e_vec = (bio_states_for_rel * e_mask).sum(1) / e_mask.sum(1).clamp(min=1) # Average pooling, clamp to avoid div by zero
+            
+            # Concatenate cause and effect vectors and pass through relation head
+            rel_logits = self.rel_head(torch.cat([c_vec, e_vec], dim=1))
+
+        return {
+            "cls_logits": cls_logits,
+            "bio_emissions": emissions,
+            "tag_loss": tag_loss, 
+            "rel_logits": rel_logits, 
         }
-
-        # relation head (only if candidate pairs provided)
-        if pair_batch is not None:
-            bio_states = hidden[pair_batch]  # (N, T, H)
-            seq_len = bio_states.size(1)
-            pos = torch.arange(seq_len, device=bio_states.device).unsqueeze(0)
-            c_mask = ((cause_starts.unsqueeze(1) <= pos) & (pos <= cause_ends.unsqueeze(1))).unsqueeze(2)
-            e_mask = ((effect_starts.unsqueeze(1) <= pos) & (pos <= effect_ends.unsqueeze(1))).unsqueeze(2)
-            c_vec = (bio_states * c_mask).sum(1) / (c_mask.sum(1) + 1e-6)
-            e_vec = (bio_states * e_mask).sum(1) / (e_mask.sum(1) + 1e-6)
-            outputs["rel_logits"] = self.rel_head(torch.cat([c_vec, e_vec], dim=1))
-
-        return outputs
-
-# # --------------------------------------------------------------------------- #
-# # Inference cascade (logic unchanged)
-# # --------------------------------------------------------------------------- #
-# class JointCausalPredictor:
-#     """Runs the 3‑step cascade on *raw sentences* using a trained model."""
-
-#     def __init__(
-#         self,
-#         model: JointCausalModel,
-#         tokenizer_name: str | None = None,
-#         device: str | torch.device = DEVICE,
-#         cls_threshold: float = 0.5,
-#     ) -> None:
-#         self.model = model.to(device).eval()
-#         tok_name = tokenizer_name or model.encoder_name  # fallback to same encoder
-#         self.tokenizer = AutoTokenizer.from_pretrained(tok_name)
-#         self.device = device
-#         self.cls_threshold = cls_threshold
-
-#     # ------------------------------------------------------------------ #
-#     # Public API
-#     # ------------------------------------------------------------------ #
-#     @torch.no_grad()
-#     def __call__(self, texts: List[str] | str) -> List[Dict]:
-#         """Analyse a sentence or list of sentences."""
-#         if isinstance(texts, str):
-#             texts = [texts]
-
-#         batch = self.tokenizer(texts, return_tensors="pt", padding=True, truncation=True).to(self.device)
-#         hidden = self.model.encode(**batch)
-
-#         # 1) sentence‑level decision
-#         cls_logits = self.model.cls_head(hidden[:, 0])
-#         cls_probs = torch.softmax(cls_logits, dim=-1)
-#         causal_flags = (cls_probs[:, 1] > self.cls_threshold).tolist()
-
-#         # 2) BIO prediction
-#         bio_pred = self.model.bio_head(hidden).argmax(-1)
-
-#         results: List[Dict] = []
-#         pair_records: list[Tuple[int, int, int, int, int]] = []
-
-#         for i, is_causal in enumerate(causal_flags):
-#             sample = {"causal_prob": cls_probs[i, 1].item(), "is_causal": is_causal, "spans": [], "relations": []}
-#             if is_causal:
-#                 spans = self._decode_spans(bio_pred[i])
-#                 sample["spans"] = spans
-#                 cause_ids = [j for j, (lab, _) in enumerate(spans) if lab in {"cause", "internal_CE"}]
-#                 effect_ids = [j for j, (lab, _) in enumerate(spans) if lab in {"effect", "internal_CE"}]
-#                 for c_id, e_id in itertools.product(cause_ids, effect_ids):
-#                     if c_id == e_id and spans[c_id][0] != "internal_CE":
-#                         continue
-#                     c_s, c_e = spans[c_id][1]
-#                     e_s, e_e = spans[e_id][1]
-#                     pair_records.append((i, c_s, c_e, e_s, e_e))
-#             results.append(sample)
-
-#         # 3) relation classification
-#         if pair_records:
-#             rel_logits = self._run_rel_head(pair_records, hidden)
-#             rel_pred = rel_logits.argmax(-1).tolist()
-#             for rec, lab in zip(pair_records, rel_pred):
-#                 sent_idx, c_s, c_e, e_s, e_e = rec
-#                 results[sent_idx]["relations"].append({
-#                     "cause_span": (c_s, c_e),
-#                     "effect_span": (e_s, e_e),
-#                     "label_id": lab,
-#                     # map id→str with id2label_rel if desired
-#                 })
-#         return results
-
-#     # ------------------------------------------------------------------ #
-#     # Helper functions
-#     # ------------------------------------------------------------------ #
-#     def _decode_spans(self, tag_seq: torch.Tensor) -> List[Tuple[str, Span]]:
-#         """Greedy BIO decoding; adjust if you prefer a CRF/FSA."""
-#         spans, cur_lab, cur_start = [], None
