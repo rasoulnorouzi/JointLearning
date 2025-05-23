@@ -16,17 +16,17 @@ MODEL_CONFIG = {
     "num_cls_labels": 2,                 # Binary classification for causal/non-causal
     "num_bio_labels": 7,                 # BIO labels for span detection
     "num_rel_labels": 2,                 # Relation labels (updated from 3 to 2)
-    "dropout": 0.1,                      # Dropout rate
+    "dropout": 0.2,                      # Dropout rate
 }
 
 # Training configuration
 TRAINING_CONFIG = {
-    "batch_size": 8,
-    "num_epochs": 10,
+    "batch_size": 16,
+    "num_epochs": 20,
     "learning_rate": 5e-5,
-    "weight_decay": 0.01,
+    "weight_decay": 0.1,
     "gradient_clip_val": 1.0,
-    "apply_gradient_clipping": False,
+    "apply_gradient_clipping": True,
     "patience_epochs": 5,
     "model_save_path": "best_joint_causal_model.pt",
 }
