@@ -16,7 +16,7 @@ model = JointCausalModel(
     num_bio_labels=MODEL_CONFIG["num_bio_labels"],
     num_rel_labels=MODEL_CONFIG["num_rel_labels"],
     dropout=MODEL_CONFIG["dropout"],
-    use_crf=True
+    use_crf=False
 
 )
 # %%
