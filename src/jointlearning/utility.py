@@ -1,13 +1,14 @@
 import numpy as np
 import torch
 import pandas as pd
+from config import DATASET_CONFIG
 
 
 def compute_class_weights(
     labels_list,
     num_classes: int,
     technique: str = 'inverse_frequency',
-    ignore_index: int = None,
+    ignore_index: int | None = DATASET_CONFIG.get("ignore_id", -100), # Default to DATASET_CONFIG["ignore_id"], fallback to -100
     beta: float = 0.999, # For ENS
     smoothing_epsilon: float = 1e-9 # To prevent division by zero
 ):
@@ -257,4 +258,8 @@ def label_value_counts(dataset_instance):
     print(f"rel_labels_value_counts:\n {rel_labels_value_counts}")
 
     # Return the flat lists of cls_labels, bio_labels, and relation labels
-    return cls_labels_flat, bio_labels_flat, rel_labels_flat
+    return {
+        "cls_labels_flat": cls_labels_flat,
+        "bio_labels_flat": bio_labels_flat,
+        "rel_labels_flat": rel_labels_flat
+    }

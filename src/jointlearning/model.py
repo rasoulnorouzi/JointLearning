@@ -38,7 +38,7 @@ from huggingface_hub import PyTorchModelHubMixin
 
 # Attempt to import from local config, provide fallbacks for standalone execution/testing
 try:
-    from .config import MODEL_CONFIG, id2label_bio, id2label_rel
+    from config import MODEL_CONFIG, id2label_bio, id2label_rel
 except ImportError:
     print("Warning: Could not import from .config. Using fallback configurations for crf_model.py.")
     MODEL_CONFIG = {

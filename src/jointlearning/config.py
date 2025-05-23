@@ -34,7 +34,7 @@ TRAINING_CONFIG = {
 # Dataset configuration
 DATASET_CONFIG = {
     "max_length": 512,                    # Maximum sequence length for tokenization
-    "negative_relation_rate": 1.0,        # Rate of negative relation samples to generate
+    "negative_relation_rate": 2.0,        # Rate of negative relation samples to generate
     "max_random_span_len": 5,            # Maximum length for random negative spans
     "ignore_id": -100,                   # ID to ignore in loss computation
 }
