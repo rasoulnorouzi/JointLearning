@@ -1,21 +1,12 @@
-"""Joint Causal Extraction Model (switchable CRF / soft‑max)
+"""Joint Causal Extraction Model (softmax)
 ============================================================================
 
-A *single* PyTorch module that can be instantiated in two modes:
-
-* **CRF mode** (`use_crf=True`, default):  BIO tagging is decoded by a linear–
-  chain CRF and trained with negative log‑likelihood (no class weights).
-* **Soft‑max mode** (`use_crf=False`):  BIO tagging is trained with standard
-  per‑token cross‑entropy; you can pass **class weights** for the rare "B-CE" /
-  "I-CE" tags, which is impossible with `torchcrf`.
+A PyTorch module for joint causal extraction using softmax decoding for BIO tagging.
+The model supports class weights for handling imbalanced data.
 
 ```python
->>> model = JointCausalModel(use_crf=False)        # soft‑max baseline
->>> crf_model = JointCausalModel(use_crf=True)     # CRF variant
+>>> model = JointCausalModel()        # softmax-based model
 ```
-
-The flag is saved in `config.json`, so `from_pretrained()` restores the right
-variant automatically.
 
 ---------------------------------------------------------------------------
 Usage overview
@@ -32,7 +23,6 @@ from __future__ import annotations
 from typing import Dict, Tuple, Optional, Any 
 import torch
 import torch.nn as nn
-from torchcrf import CRF 
 from transformers import AutoModel
 from huggingface_hub import PyTorchModelHubMixin
 
@@ -92,7 +82,6 @@ class JointCausalModel(nn.Module, PyTorchModelHubMixin):
         num_bio_labels: int = MODEL_CONFIG["num_bio_labels"],
         num_rel_labels: int = MODEL_CONFIG["num_rel_labels"],
         dropout: float = MODEL_CONFIG["dropout"],
-        use_crf: bool = True,
     ) -> None:
         """Initializes the JointCausalModel.
 
@@ -103,8 +92,6 @@ class JointCausalModel(nn.Module, PyTorchModelHubMixin):
             num_bio_labels: Number of labels for the BIO tagging task.
             num_rel_labels: Number of labels for the relation extraction task.
             dropout: Dropout rate for regularization.
-            use_crf: If True, a CRF layer is used for BIO tagging. Otherwise,
-                a softmax layer is used.
         """
         super().__init__()
 
@@ -113,7 +100,6 @@ class JointCausalModel(nn.Module, PyTorchModelHubMixin):
         self.num_bio_labels = num_bio_labels
         self.num_rel_labels = num_rel_labels
         self.dropout_rate = dropout
-        self.use_crf = use_crf
         self.enc = AutoModel.from_pretrained(encoder_name)
         self.hidden_size = self.enc.config.hidden_size
         self.dropout = nn.Dropout(dropout)
@@ -133,7 +119,6 @@ class JointCausalModel(nn.Module, PyTorchModelHubMixin):
             nn.Dropout(dropout),
             nn.Linear(self.hidden_size // 2, num_bio_labels),
         )
-        self.crf: CRF | None = CRF(num_bio_labels, batch_first=True) if use_crf else None
         self.rel_head = nn.Sequential(
             nn.Linear(self.hidden_size * 2, self.hidden_size), 
             nn.ReLU(),
@@ -153,7 +138,6 @@ class JointCausalModel(nn.Module, PyTorchModelHubMixin):
             "num_bio_labels": self.num_bio_labels,
             "num_rel_labels": self.num_rel_labels,
             "dropout": self.dropout_rate,
-            "use_crf": self.use_crf,
         }
 
     @classmethod
@@ -231,20 +215,9 @@ class JointCausalModel(nn.Module, PyTorchModelHubMixin):
         tag_loss: Optional[torch.Tensor] = None
 
         # Calculate BIO tagging loss if labels are provided
-        if bio_labels is not None and self.use_crf and self.crf is not None:
-            # CRF loss calculation
-            active_mask = attention_mask.bool() & (bio_labels != -100) # Ignore padding and special tokens
-            if active_mask.shape[1] > 0 : # Ensure sequence length is greater than 0
-                 active_mask[:, 0] = attention_mask[:, 0].bool() # Ensure [CLS] token is handled correctly in mask
-            safe_bio_labels = bio_labels.clone()
-            safe_bio_labels[safe_bio_labels == -100] = label2id_bio.get("O", 0) # Replace -100 with "O" label for CRF
-            if torch.any(active_mask): # Only compute loss if there are active tokens
-                tag_loss = -self.crf(emissions, safe_bio_labels, mask=active_mask, reduction="mean")
-            else: # Handle cases with no active tokens (e.g., all padding)
-                tag_loss = torch.tensor(0.0, device=emissions.device)
-        elif bio_labels is not None and not self.use_crf:
+        if bio_labels is not None:
             # Softmax loss (typically handled by the training loop's loss function, e.g., CrossEntropyLoss)
-            # Here, we initialize it to 0.0 as a placeholder if not using CRF.
+            # Here, we initialize it to 0.0 as a placeholder.
             # The actual loss calculation for softmax would compare emissions with bio_labels.
             tag_loss = torch.tensor(0.0, device=emissions.device)
 

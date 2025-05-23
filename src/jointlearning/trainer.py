@@ -118,10 +118,7 @@ def train_model(
     # 3. Define Loss Functions
     cls_loss_fn = nn.CrossEntropyLoss(weight=cls_class_weights)
     rel_loss_fn = nn.CrossEntropyLoss(weight=rel_class_weights)
-    bio_loss_fn_softmax = None
-    # Ensure model has 'use_crf' and 'num_bio_labels' attributes if they are accessed
-    if not getattr(model, 'use_crf', False): # Check if CRF is not used
-        bio_loss_fn_softmax = nn.CrossEntropyLoss(weight=bio_class_weights, ignore_index=-100)
+    bio_loss_fn_softmax = nn.CrossEntropyLoss(weight=bio_class_weights, ignore_index=-100)
 
     # 4. Initialization for Tracking
     best_overall_f1 = -1.0
@@ -179,12 +176,9 @@ def train_model(
             loss_cls = cls_loss_fn(outputs["cls_logits"], cls_labels_gold)
             
             loss_bio = torch.tensor(0.0, device=device)
-            if getattr(model, 'use_crf', False):
-                if outputs["tag_loss"] is not None: # CRF loss is returned directly by the model
-                    loss_bio = outputs["tag_loss"]
-            elif bio_loss_fn_softmax: # Softmax loss
+            if bio_loss_fn_softmax: # Softmax loss
                 loss_bio = bio_loss_fn_softmax(
-                    outputs["bio_emissions"].view(-1, getattr(model, 'num_bio_labels', 0)), # Access num_bio_labels safely
+                    outputs["bio_emissions"].view(-1, model.num_bio_labels),
                     bio_labels_gold.view(-1)
                 )
 
@@ -273,12 +267,9 @@ def train_model(
                 loss_cls_val = cls_loss_fn(outputs["cls_logits"], cls_labels_gold)
                 
                 loss_bio_val = torch.tensor(0.0, device=device)
-                if getattr(model, 'use_crf', False):
-                    if outputs["tag_loss"] is not None:
-                        loss_bio_val = outputs["tag_loss"]
-                elif bio_loss_fn_softmax:
+                if bio_loss_fn_softmax:
                     loss_bio_val = bio_loss_fn_softmax(
-                        outputs["bio_emissions"].view(-1, getattr(model, 'num_bio_labels', 0)),
+                        outputs["bio_emissions"].view(-1, model.num_bio_labels),
                         bio_labels_gold.view(-1)
                     )
 

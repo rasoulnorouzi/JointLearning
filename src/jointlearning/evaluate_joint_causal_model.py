@@ -23,16 +23,12 @@ def evaluate_model(
     Evaluates the multitask model on a given dataset, focusing on metrics.
 
     This version removes loss calculation, expecting it to be handled
-    during the training loop. It correctly handles both CRF and Softmax
-    BIO predictions for metric calculation by:
+    during the training loop. It uses softmax BIO predictions for metric calculation by:
     1.  Expecting a dictionary output from the model.
-    2.  Using `model.crf.decode()` if `use_crf` is True.
-    3.  Using `torch.argmax()` if `use_crf` is False.
+    2.  Using `torch.argmax()` on emissions for BIO predictions.
 
     Args:
         model: The PyTorch model (JointCausalModel) to evaluate.
-               It's expected to have a `use_crf` attribute and potentially
-               a `crf` attribute if `use_crf` is True.
         dataloader: DataLoader for the validation or test set.
         device: The device (CPU or CUDA) to run evaluation on.
         id2label_cls: Mapping from class ID to class name for classification task.
@@ -107,33 +103,15 @@ def evaluate_model(
             # Create the active mask to ignore padding and special tokens (-100)
             active_mask = attention_mask.bool() & (bio_labels_gold != -100)
 
-            # --- MODIFIED: Handle CRF/Softmax BIO Prediction ---
-            if hasattr(model, "use_crf") and model.use_crf and hasattr(model, "crf") and model.crf is not None:
-                # CRF Decoding: Use the CRF layer's decode method
-                # It returns the best tag sequence (List[List[int]])
-                bio_preds_batch_list = model.crf.decode(bio_emissions, mask=attention_mask.bool()) # Use full attention mask for CRF decode
-
-                # Process each sequence in the batch
-                for i in range(len(bio_preds_batch_list)):
-                    # Get CRF predictions (already masked)
-                    preds_for_seq = bio_preds_batch_list[i]
-                    # Get gold labels, applying the active_mask
-                    labels_for_seq = bio_labels_gold[i][active_mask[i]].cpu().numpy()
-
-                    # Ensure lengths match before extending (safety check)
-                    min_len = min(len(preds_for_seq), len(labels_for_seq))
-                    all_bio_preds.extend(preds_for_seq[:min_len])
-                    all_bio_labels.extend(labels_for_seq[:min_len])
-            else:
-                # Softmax Prediction: Use argmax on emissions
-                bio_preds_batch = torch.argmax(bio_emissions, dim=-1)
-                for i in range(bio_labels_gold.shape[0]):
-                    # Apply active_mask to both predictions and labels
-                    active_indices = active_mask[i]
-                    preds_for_seq = bio_preds_batch[i][active_indices].cpu().numpy()
-                    labels_for_seq = bio_labels_gold[i][active_indices].cpu().numpy()
-                    all_bio_preds.extend(preds_for_seq)
-                    all_bio_labels.extend(labels_for_seq)
+            # Softmax Prediction: Use argmax on emissions
+            bio_preds_batch = torch.argmax(bio_emissions, dim=-1)
+            for i in range(bio_labels_gold.shape[0]):
+                # Apply active_mask to both predictions and labels
+                active_indices = active_mask[i]
+                preds_for_seq = bio_preds_batch[i][active_indices].cpu().numpy()
+                labels_for_seq = bio_labels_gold[i][active_indices].cpu().numpy()
+                all_bio_preds.extend(preds_for_seq)
+                all_bio_labels.extend(labels_for_seq)
 
 
             # Task 3: Relation Prediction

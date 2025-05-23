@@ -15,9 +15,7 @@ model = JointCausalModel(
     num_cls_labels=MODEL_CONFIG["num_cls_labels"],
     num_bio_labels=MODEL_CONFIG["num_bio_labels"],
     num_rel_labels=MODEL_CONFIG["num_rel_labels"],
-    dropout=MODEL_CONFIG["dropout"],
-    use_crf=False
-
+    dropout=MODEL_CONFIG["dropout"]
 )
 # %%
 train_data_path = "C:\\Users\\norouzin\\Desktop\\JointLearning\\datasets\\expert_multi_task_data\\train.csv"
