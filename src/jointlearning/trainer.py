@@ -186,7 +186,7 @@ def train_model(
             if outputs["rel_logits"] is not None and rel_labels_gold is not None and outputs["rel_logits"].shape[0] > 0:
                 loss_rel = rel_loss_fn(outputs["rel_logits"], rel_labels_gold)
 
-            total_loss = loss_cls + loss_bio + loss_rel
+            total_loss = loss_cls + (4.0*loss_bio) + loss_rel
             
             # Check for NaN loss before backward pass
             if torch.isnan(total_loss):
@@ -371,6 +371,13 @@ def train_model(
         model.load_state_dict(torch.load(model_save_path, map_location=device))
     else:
         print("No best model was saved or found. Returning the model from the last training epoch.")
+
+    # Save training history as JSON in the same directory as the model weights
+    import json
+    history_save_path = os.path.join(os.path.dirname(model_save_path), "training_history.json")
+    with open(history_save_path, "w") as f:
+        json.dump(history, f, indent=2)
+    print(f"Training history saved to {history_save_path}")
 
     return model, history
 
