@@ -25,27 +25,8 @@ import torch
 import torch.nn as nn
 from transformers import AutoModel
 from huggingface_hub import PyTorchModelHubMixin
+from config import MODEL_CONFIG, id2label_bio, id2label_rel
 
-# Attempt to import from local config, provide fallbacks for standalone execution/testing
-try:
-    from config import MODEL_CONFIG, id2label_bio, id2label_rel
-except ImportError:
-    print("Warning: Could not import from .config. Using fallback configurations for crf_model.py.")
-    MODEL_CONFIG = {
-        "encoder_name": "bert-base-uncased",
-        "num_cls_labels": 2,
-        "num_bio_labels": 7, 
-        "num_rel_labels": 2, 
-        "dropout": 0.1,
-    }
-    id2label_bio = {
-        0: "O", 1: "B-C", 2: "I-C", 3: "B-E", 4: "I-E", 5: "B-CE", 6: "I-CE"
-    }
-    id2label_rel = {
-        0: "NoRel", 1: "Rel_CE"
-    }
-    INFERENCE_CONFIG = {"cls_threshold": 0.5}
-    DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 # ---------------------------------------------------------------------------
