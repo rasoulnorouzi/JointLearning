@@ -1,32 +1,22 @@
 # %%
 import torch
 import torch.nn as nn
+import torch.nn.functional as F # Added back for F.softmax
 import torch.optim as optim
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 import numpy as np
-import pandas as pd
 import random
 import os
 import copy # For deep copying the best model state
-from config import DEVICE, SEED, MODEL_CONFIG, TRAINING_CONFIG, DATASET_CONFIG
+import json # Added back for json.dump
 from model import JointCausalModel # Assuming this is your model class
-from utility import compute_class_weights, label_value_counts
-from dataset_collator import CausalDataset, CausalDatasetCollator
 from config import id2label_cls, id2label_bio, id2label_rel
 from evaluate_joint_causal_model import evaluate_model, print_eval_report
+from loss import GCELoss # Import GCELoss from loss.py
+
+
 # %%
-
-# Assuming your model and evaluation script are in the same directory or accessible
-# Adjust these imports based on your project structure.
-# Example:
-# from .crf_model import JointCausalModel # If in a separate train.py
-# from .evaluate_joint_causal_model import evaluate_model, print_eval_report
-
-# For standalone testing, you might need to define or import these if not already available
-# from crf_model import JointCausalModel # Example if files are in the same directory
-# from evaluate_joint_causal_model import evaluate_model, print_eval_report
-
 
 # Define a type alias for clarity
 ModelType = nn.Module # Or specifically JointCausalModel if imported
@@ -44,59 +34,113 @@ def train_model(
     model_save_path: str = "best_model.pt",
     scheduler: optim.lr_scheduler._LRScheduler = None, # type: ignore
     cls_class_weights: torch.Tensor = None,
-    bio_class_weights: torch.Tensor = None, # Only for softmax
+    bio_class_weights: torch.Tensor = None, 
     rel_class_weights: torch.Tensor = None,
-    patience_epochs: int = 5, # Default patience for early stopping
+    patience_epochs: int = 5, 
     seed: int = 8642,
-    max_grad_norm: float | None = 1.0, # Max norm for gradient clipping (None to disable)
-    eval_fn_metrics=None, # Pass your evaluate_model function here
-    print_report_fn=None  # Pass your print_eval_report function here
+    max_grad_norm: float | None = 1.0, 
+    eval_fn_metrics=None, 
+    print_report_fn=None,
+    is_silver_training: bool = False, # If True, uses GCE loss for silver (pseudo-annotated) data
+    gce_q_value: float = 0.7, # q value for GCE loss if used
+    task_loss_weights: dict = None # Weights for cls, bio, rel losses e.g. {"cls": 1.0, "bio": 4.0, "rel": 1.0}
 ) -> tuple[ModelType, dict]:
     """
-    Trains the JointCausalModel with comprehensive features including
-    optional gradient clipping and early stopping.
+    Trains the Joint Causal Model, supporting both standard CrossEntropy and GCE loss,
+    class imbalance weighting, task-specific loss weighting, gradient clipping,
+    learning rate scheduling, and early stopping based on validation F1-score.
 
     Args:
-        model: The JointCausalModel instance.
-        train_dataloader: DataLoader for the training set.
-        val_dataloader: DataLoader for the validation set.
-        optimizer: The optimization algorithm.
-        num_epochs: Total number of training epochs.
-        device: The torch.device (CPU or CUDA).
-        id2label_cls: Mapping for classification task labels.
-        id2label_bio: Mapping for BIO task labels.
-        id2label_rel: Mapping for relation task labels.
-        model_save_path (str): Path to save the best performing model.
-                               Defaults to "best_model.pt".
-        scheduler (Optional): Learning rate scheduler. Defaults to None.
-        cls_class_weights (Optional[torch.Tensor]): Class weights for CLS loss.
-                                                   Defaults to None.
-        bio_class_weights (Optional[torch.Tensor]): Class weights for BIO loss
-                                                    (softmax only). Defaults to None.
-        rel_class_weights (Optional[torch.Tensor]): Class weights for REL loss.
-                                                   Defaults to None.
-        patience_epochs (int): Number of epochs to wait for improvement before
-                               early stopping. Defaults to 5.
-        seed (int): Random seed for reproducibility. Defaults to 42.
-        max_grad_norm (Optional[float]): The maximum norm for gradient
-                                         clipping. If None, no clipping
-                                         is performed. Defaults to 1.0.
-        eval_fn_metrics: The function to call for evaluation metrics
-                         (e.g., your modified evaluate_model).
-        print_report_fn: The function to call for printing epoch reports
-                         (e.g., your modified print_eval_report).
+        model (ModelType): The PyTorch model to be trained.
+        train_dataloader (DataLoader): DataLoader for the training dataset.
+        val_dataloader (DataLoader): DataLoader for the validation dataset.
+        optimizer (optim.Optimizer): The optimization algorithm.
+        num_epochs (int): Total number of epochs for training.
+        device (torch.device): The device (CPU or CUDA) to train on.
+        id2label_cls (dict): Mapping from ID to label for the classification task.
+        id2label_bio (dict): Mapping from ID to label for the BIO task.
+        id2label_rel (dict): Mapping from ID to label for the relation task.
+        model_save_path (str, optional): Path to save the best model weights.
+                                         Defaults to "best_model.pt".
+        scheduler (optim.lr_scheduler._LRScheduler, optional): Learning rate scheduler.
+                                                               Defaults to None.
+        cls_class_weights (torch.Tensor, optional): Class weights for the CLS loss.
+                                                    Defaults to None.
+        bio_class_weights (torch.Tensor, optional): Class weights for the BIO loss.
+                                                    Defaults to None.
+        rel_class_weights (torch.Tensor, optional): Class weights for the REL loss.
+                                                    Defaults to None.
+        patience_epochs (int, optional): Number of epochs with no F1 improvement
+                                         before early stopping. Defaults to 5.
+        seed (int, optional): Random seed for reproducibility. Defaults to 8642.
+        max_grad_norm (float | None, optional): Maximum norm for gradient clipping.
+                                                Set to None to disable. Defaults to 1.0.
+        eval_fn_metrics (callable, optional): Function to compute evaluation metrics.
+                                              Must be provided.
+        print_report_fn (callable, optional): Function to print the epoch summary report.
+                                              Must be provided.
+        is_silver_training (bool, optional): If True, switches to GCE loss, intended
+                                             for training on noisy/pseudo-annotated data.
+                                             Defaults to False (uses CrossEntropy).
+        gce_q_value (float, optional): The 'q' hyperparameter for GCE loss if used.
+                                       Defaults to 0.7.
+        task_loss_weights (dict, optional): A dictionary specifying weights for each task's
+                                            loss contribution, e.g.,
+                                            {"cls": 1.0, "bio": 4.0, "rel": 1.0}.
+                                            If None, defaults to 1.0 for all tasks.
+
+    Raises:
+        ValueError: If eval_fn_metrics or print_report_fn are not provided, or
+                    if an unsupported loss_type is derived.
 
     Returns:
-        A tuple containing:
-            - The best trained model instance (loaded from model_save_path or
-              best in-memory state).
-            - A history dictionary with training and validation losses and metrics.
+        tuple[ModelType, dict]: A tuple containing:
+            - The best trained model (loaded from the saved state or the best in-memory state).
+            - A dictionary containing the history of training/validation losses and F1 scores.
     """
 
+    # --- Pre-flight Checks & Setup ---
     if eval_fn_metrics is None or print_report_fn is None:
         raise ValueError("eval_fn_metrics and print_report_fn must be provided.")
 
-    # 1. Reproducibility
+    # Determine loss type based on the training mode flag
+    actual_loss_type = "gce" if is_silver_training else "cross_entropy"
+    print(f"--- Training Configuration ---")
+    print(f"Device: {device}")
+    print(f"Number of Epochs: {num_epochs}")
+    print(f"Seed: {seed}")
+    optimizer_params = optimizer.defaults
+    print(f"Optimizer: {optimizer.__class__.__name__} (LR: {optimizer_params.get('lr', 'N/A')}, Weight Decay: {optimizer_params.get('weight_decay', 'N/A')})")
+    if scheduler:
+        print(f"Scheduler: {scheduler.__class__.__name__}")
+    else:
+        print(f"Scheduler: None")
+    print(f"Max Grad Norm: {max_grad_norm if max_grad_norm is not None else 'Disabled'} (Mode: L2 norm if enabled)")
+    print(f"Early Stopping Patience: {patience_epochs if patience_epochs > 0 else 'Disabled'}")
+    print(f"Model Save Path: {model_save_path if model_save_path else 'Not saving model to disk'}")
+    print(f"Mode: {'Silver Data Training (GCE)' if is_silver_training else 'Standard Training (CrossEntropy)'}")
+    if actual_loss_type == "gce":
+        print(f"GCE q value: {gce_q_value}")
+
+    # Determine task loss weights, setting defaults if None or incomplete
+    _task_loss_weights = {}
+    default_weights = {"cls": 1.0, "bio": 1.0, "rel": 1.0}
+    if task_loss_weights is None:
+        _task_loss_weights = default_weights
+        print(f"Task loss weights not provided, using default: {_task_loss_weights}")
+    else:
+        _task_loss_weights["cls"] = task_loss_weights.get("cls", default_weights["cls"])
+        _task_loss_weights["bio"] = task_loss_weights.get("bio", default_weights["bio"])
+        _task_loss_weights["rel"] = task_loss_weights.get("rel", default_weights["rel"])
+        if len(task_loss_weights) != 3 or not all(k in task_loss_weights for k in default_weights):
+             print(f"Warning: Provided task_loss_weights may be incomplete. Using defaults for missing keys.")
+        print(f"Using task loss weights: {_task_loss_weights}")
+    print(f"CLS Class Weights: {'Provided' if cls_class_weights is not None else 'None'}")
+    print(f"BIO Class Weights: {'Provided' if bio_class_weights is not None else 'None'}")
+    print(f"REL Class Weights: {'Provided' if rel_class_weights is not None else 'None'}")
+    print(f"----------------------------")
+
+    # 1. Reproducibility: Set random seeds for all relevant libraries
     if seed is not None:
         torch.manual_seed(seed)
         np.random.seed(seed)
@@ -106,120 +150,106 @@ def train_model(
             torch.backends.cudnn.deterministic = True
             torch.backends.cudnn.benchmark = False
 
-    # 2. Move model and class weights to device
+    # 2. Device Setup: Move model and class weights (if any) to the target device
     model.to(device)
-    if cls_class_weights is not None:
-        cls_class_weights = cls_class_weights.to(device)
-    if bio_class_weights is not None: # Only for softmax
-        bio_class_weights = bio_class_weights.to(device)
-    if rel_class_weights is not None:
-        rel_class_weights = rel_class_weights.to(device)
+    if cls_class_weights is not None: cls_class_weights = cls_class_weights.to(device)
+    if bio_class_weights is not None: bio_class_weights = bio_class_weights.to(device)
+    if rel_class_weights is not None: rel_class_weights = rel_class_weights.to(device)
 
-    # 3. Define Loss Functions
-    cls_loss_fn = nn.CrossEntropyLoss(weight=cls_class_weights)
-    rel_loss_fn = nn.CrossEntropyLoss(weight=rel_class_weights)
-    bio_loss_fn_softmax = nn.CrossEntropyLoss(weight=bio_class_weights, ignore_index=-100)
+    # 3. Define Loss Functions: Choose between GCE or CrossEntropy based on config
+    if actual_loss_type == "gce":
+        cls_loss_fn = GCELoss(q=gce_q_value, num_classes=model.num_cls_labels, weight=cls_class_weights)
+        rel_loss_fn = GCELoss(q=gce_q_value, num_classes=model.num_rel_labels, weight=rel_class_weights)
+        bio_loss_fn_softmax = GCELoss(q=gce_q_value, num_classes=model.num_bio_labels, weight=bio_class_weights, ignore_index=-100)
+    else: # "cross_entropy"
+        cls_loss_fn = nn.CrossEntropyLoss(weight=cls_class_weights)
+        rel_loss_fn = nn.CrossEntropyLoss(weight=rel_class_weights)
+        bio_loss_fn_softmax = nn.CrossEntropyLoss(weight=bio_class_weights, ignore_index=-100)
 
-    # 4. Initialization for Tracking
-    best_overall_f1 = -1.0
-    patience_counter = 0
-    history = {
+    # 4. Initialization for Tracking: Setup variables for early stopping and history
+    best_overall_f1 = -1.0  # Track the best validation F1 score achieved
+    patience_counter = 0    # Track epochs since last F1 improvement
+    history = { # Dictionary to store metrics over epochs
         "train_loss_total": [], "train_loss_cls": [], "train_loss_bio": [], "train_loss_rel": [],
         "val_loss_total": [], "val_loss_cls": [], "val_loss_bio": [], "val_loss_rel": [],
         "val_overall_f1": []
     }
-    best_model_state = None # To store the state_dict of the best model in memory
+    best_model_state = None # To store the best model's state_dict in memory
 
-    # 5. Training Loop
+    # 5. Training Loop: Iterate through each epoch
     for epoch_num in range(1, num_epochs + 1):
-        # --- Training Phase ---
-        model.train()
-        epoch_train_loss_total, epoch_train_loss_cls, epoch_train_loss_bio, epoch_train_loss_rel = 0, 0, 0, 0
         
+        # --- Training Phase ---
+        model.train() # Set model to training mode
+        epoch_train_loss_total, epoch_train_loss_cls, epoch_train_loss_bio, epoch_train_loss_rel = 0,0,0,0
+        
+        # Use tqdm for a progress bar over the training dataloader
         train_pbar = tqdm(train_dataloader, desc=f"Epoch {epoch_num}/{num_epochs} [Training]", leave=False)
         for batch_idx, batch in enumerate(train_pbar):
-            # Move batch to device
+            # Move all batch data to the target device
             input_ids = batch["input_ids"].to(device)
             attention_mask = batch["attention_mask"].to(device)
             cls_labels_gold = batch["cls_labels"].to(device)
             bio_labels_gold = batch["bio_labels"].to(device)
+            pair_batch = batch.get("pair_batch", None)
+            cause_starts, cause_ends = batch.get("cause_starts", None), batch.get("cause_ends", None)
+            effect_starts, effect_ends = batch.get("effect_starts", None), batch.get("effect_ends", None)
+            rel_labels_gold = batch.get("rel_labels", None)
+            if pair_batch is not None: pair_batch = pair_batch.to(device)
+            if cause_starts is not None: cause_starts = cause_starts.to(device)
+            if cause_ends is not None: cause_ends = cause_ends.to(device)
+            if effect_starts is not None: effect_starts = effect_starts.to(device)
+            if effect_ends is not None: effect_ends = effect_ends.to(device)
+            if rel_labels_gold is not None: rel_labels_gold = rel_labels_gold.to(device)
             
-            pair_batch = batch.get("pair_batch")
-            cause_starts = batch.get("cause_starts")
-            cause_ends = batch.get("cause_ends")
-            effect_starts = batch.get("effect_starts")
-            effect_ends = batch.get("effect_ends")
-            rel_labels_gold = batch.get("rel_labels")
-
-            pair_batch = pair_batch.to(device) if pair_batch is not None else None
-            cause_starts = cause_starts.to(device) if cause_starts is not None else None
-            cause_ends = cause_ends.to(device) if cause_ends is not None else None
-            effect_starts = effect_starts.to(device) if effect_starts is not None else None
-            effect_ends = effect_ends.to(device) if effect_ends is not None else None
-            rel_labels_gold = rel_labels_gold.to(device) if rel_labels_gold is not None else None
-            
+            # Zero out gradients before the forward pass
             optimizer.zero_grad()
 
-            # Forward pass
+            # Forward pass: Get model outputs
             outputs = model(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                bio_labels=bio_labels_gold, # Pass gold labels for CRF loss calculation if needed
-                pair_batch=pair_batch,
-                cause_starts=cause_starts,
-                cause_ends=cause_ends,
-                effect_starts=effect_starts,
-                effect_ends=effect_ends
+                input_ids=input_ids, attention_mask=attention_mask, bio_labels=bio_labels_gold,
+                pair_batch=pair_batch, cause_starts=cause_starts, cause_ends=cause_ends,
+                effect_starts=effect_starts, effect_ends=effect_ends
             )
 
-            # Calculate losses
+            # Calculate individual task losses
             loss_cls = cls_loss_fn(outputs["cls_logits"], cls_labels_gold)
-            
-            loss_bio = torch.tensor(0.0, device=device)
-            if bio_loss_fn_softmax: # Softmax loss
-                loss_bio = bio_loss_fn_softmax(
-                    outputs["bio_emissions"].view(-1, model.num_bio_labels),
-                    bio_labels_gold.view(-1)
-                )
-
+            loss_bio = bio_loss_fn_softmax(outputs["bio_emissions"].view(-1, model.num_bio_labels), bio_labels_gold.view(-1))
             loss_rel = torch.tensor(0.0, device=device)
             if outputs["rel_logits"] is not None and rel_labels_gold is not None and outputs["rel_logits"].shape[0] > 0:
                 loss_rel = rel_loss_fn(outputs["rel_logits"], rel_labels_gold)
 
-            total_loss = loss_cls + (4.0*loss_bio) + loss_rel
+            # Calculate total loss, applying task weights
+            total_loss = (_task_loss_weights["cls"] * loss_cls + 
+                          _task_loss_weights["bio"] * loss_bio + 
+                          _task_loss_weights["rel"] * loss_rel)
             
-            # Check for NaN loss before backward pass
+            # Check for NaN loss and skip the batch if found
             if torch.isnan(total_loss):
-                print(f"Epoch {epoch_num}, Batch {batch_idx}: NaN loss detected! Skipping backward pass for this batch.")
-                print(f"Individual losses - CLS: {loss_cls.item()}, BIO: {loss_bio.item()}, REL: {loss_rel.item()}")
-                # Optionally, you might want to log more details or even stop training
-                continue # Skip to the next batch
+                print(f"Epoch {epoch_num}, Batch {batch_idx}: NaN loss detected! Skipping backward pass.")
+                print(f"CLS: {loss_cls.item()}, BIO: {loss_bio.item()}, REL: {loss_rel.item()}")
+                continue 
 
+            # Backward pass: Compute gradients
             total_loss.backward()
 
-            # Gradient Clipping
+            # Gradient Clipping: Prevent exploding gradients
             if max_grad_norm is not None:
-                torch.nn.utils.clip_grad_norm_(
-                    model.parameters(), 
-                    max_norm=max_grad_norm
-                )
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=max_grad_norm)
             
+            # Optimizer step: Update model weights
             optimizer.step()
 
-            # Accumulate losses
+            # Accumulate losses for epoch average
             epoch_train_loss_total += total_loss.item()
             epoch_train_loss_cls += loss_cls.item()
-            epoch_train_loss_bio += loss_bio.item() if isinstance(loss_bio, torch.Tensor) else loss_bio # Handle if loss_bio is float
+            epoch_train_loss_bio += loss_bio.item()
             epoch_train_loss_rel += loss_rel.item()
 
-            # Update progress bar
-            train_pbar.set_postfix(
-                total_loss=f"{total_loss.item():.4f}",
-                cls=f"{loss_cls.item():.4f}",
-                bio=f"{loss_bio.item() if isinstance(loss_bio, torch.Tensor) else loss_bio:.4f}",
-                rel=f"{loss_rel.item():.4f}"
-            )
+            # Update progress bar description
+            train_pbar.set_postfix(total_loss=f"{total_loss.item():.4f}", cls=f"{loss_cls.item():.4f}", bio=f"{loss_bio.item():.4f}", rel=f"{loss_rel.item():.4f}")
         
+        # Calculate average training losses for the epoch
         avg_epoch_train_loss_total = epoch_train_loss_total / len(train_dataloader) if len(train_dataloader) > 0 else 0
         avg_epoch_train_loss_cls = epoch_train_loss_cls / len(train_dataloader) if len(train_dataloader) > 0 else 0
         avg_epoch_train_loss_bio = epoch_train_loss_bio / len(train_dataloader) if len(train_dataloader) > 0 else 0
@@ -227,173 +257,163 @@ def train_model(
         train_pbar.close()
 
         # --- Validation Phase ---
-        model.eval()
-        epoch_val_loss_total, epoch_val_loss_cls, epoch_val_loss_bio, epoch_val_loss_rel = 0, 0, 0, 0
-        
+        model.eval() # Set model to evaluation mode (disables dropout, etc.)
+        epoch_val_loss_total, epoch_val_loss_cls, epoch_val_loss_bio, epoch_val_loss_rel = 0,0,0,0
         val_pbar = tqdm(val_dataloader, desc=f"Epoch {epoch_num}/{num_epochs} [Validation]", leave=False)
-        with torch.no_grad():
+        with torch.no_grad(): # Disable gradient calculation for validation
             for batch in val_pbar:
+                # Move batch to device
                 input_ids = batch["input_ids"].to(device)
                 attention_mask = batch["attention_mask"].to(device)
                 cls_labels_gold = batch["cls_labels"].to(device)
                 bio_labels_gold = batch["bio_labels"].to(device)
+                pair_batch = batch.get("pair_batch", None)
+                cause_starts, cause_ends = batch.get("cause_starts", None), batch.get("cause_ends", None)
+                effect_starts, effect_ends = batch.get("effect_starts", None), batch.get("effect_ends", None)
+                rel_labels_gold = batch.get("rel_labels", None)
+                if pair_batch is not None: pair_batch = pair_batch.to(device)
+                if cause_starts is not None: cause_starts = cause_starts.to(device)
+                if cause_ends is not None: cause_ends = cause_ends.to(device)
+                if effect_starts is not None: effect_starts = effect_starts.to(device)
+                if effect_ends is not None: effect_ends = effect_ends.to(device)
+                if rel_labels_gold is not None: rel_labels_gold = rel_labels_gold.to(device)
 
-                pair_batch = batch.get("pair_batch")
-                cause_starts = batch.get("cause_starts")
-                cause_ends = batch.get("cause_ends")
-                effect_starts = batch.get("effect_starts")
-                effect_ends = batch.get("effect_ends")
-                rel_labels_gold = batch.get("rel_labels")
-
-                pair_batch = pair_batch.to(device) if pair_batch is not None else None
-                cause_starts = cause_starts.to(device) if cause_starts is not None else None
-                cause_ends = cause_ends.to(device) if cause_ends is not None else None
-                effect_starts = effect_starts.to(device) if effect_starts is not None else None
-                effect_ends = effect_ends.to(device) if effect_ends is not None else None
-                rel_labels_gold = rel_labels_gold.to(device) if rel_labels_gold is not None else None
-
+                # Forward pass
                 outputs = model(
-                    input_ids=input_ids,
-                    attention_mask=attention_mask,
-                    bio_labels=bio_labels_gold,
-                    pair_batch=pair_batch,
-                    cause_starts=cause_starts,
-                    cause_ends=cause_ends,
-                    effect_starts=effect_starts,
-                    effect_ends=effect_ends
+                    input_ids=input_ids, attention_mask=attention_mask, bio_labels=bio_labels_gold,
+                    pair_batch=pair_batch, cause_starts=cause_starts, cause_ends=cause_ends,
+                    effect_starts=effect_starts, effect_ends=effect_ends
                 )
-
-                # Calculate validation losses (similar to training)
-                loss_cls_val = cls_loss_fn(outputs["cls_logits"], cls_labels_gold)
                 
-                loss_bio_val = torch.tensor(0.0, device=device)
-                if bio_loss_fn_softmax:
-                    loss_bio_val = bio_loss_fn_softmax(
-                        outputs["bio_emissions"].view(-1, model.num_bio_labels),
-                        bio_labels_gold.view(-1)
-                    )
-
+                # Calculate validation losses (using same loss functions as training)
+                loss_cls_val = cls_loss_fn(outputs["cls_logits"], cls_labels_gold)
+                loss_bio_val = bio_loss_fn_softmax(outputs["bio_emissions"].view(-1, model.num_bio_labels), bio_labels_gold.view(-1))
                 loss_rel_val = torch.tensor(0.0, device=device)
                 if outputs["rel_logits"] is not None and rel_labels_gold is not None and outputs["rel_logits"].shape[0] > 0:
-                    loss_rel_val = rel_loss_fn(outputs["rel_logits"], rel_labels_gold)
+                     if rel_labels_gold.numel() > 0 : 
+                        loss_rel_val = rel_loss_fn(outputs["rel_logits"], rel_labels_gold)
 
+                # Calculate total validation loss (typically without task weights, just for monitoring)
                 total_loss_val = loss_cls_val + loss_bio_val + loss_rel_val
                 
-                if torch.isnan(total_loss_val): # Check for NaN in validation loss
-                    print(f"Epoch {epoch_num}: NaN validation loss detected for a batch. This might affect average validation loss.")
-                    # Set to a high number or skip accumulation for this batch if it makes sense
-                    # For now, it will contribute to NaN average if not handled
-                
-                epoch_val_loss_total += total_loss_val.item() if not torch.isnan(total_loss_val) else 0 # Avoid propagating NaN
+                # Check for NaN and accumulate (avoiding NaNs in sum)
+                if torch.isnan(total_loss_val): print(f"Epoch {epoch_num}: NaN validation loss detected.")
+                epoch_val_loss_total += total_loss_val.item() if not torch.isnan(total_loss_val) else 0 
                 epoch_val_loss_cls += loss_cls_val.item() if not torch.isnan(loss_cls_val) else 0
-                epoch_val_loss_bio += loss_bio_val.item() if isinstance(loss_bio_val, torch.Tensor) and not torch.isnan(loss_bio_val) else (loss_bio_val if not isinstance(loss_bio_val, torch.Tensor) else 0)
+                epoch_val_loss_bio += loss_bio_val.item() if not torch.isnan(loss_bio_val) else 0
                 epoch_val_loss_rel += loss_rel_val.item() if not torch.isnan(loss_rel_val) else 0
-                
-                val_pbar.set_postfix(
-                    total_loss=f"{total_loss_val.item() if not torch.isnan(total_loss_val) else float('nan'):.4f}"
-                )
+                val_pbar.set_postfix(loss=f"{total_loss_val.item() if not torch.isnan(total_loss_val) else float('nan'):.4f}")
         
+        # Calculate average validation losses
         avg_epoch_val_loss_total = epoch_val_loss_total / len(val_dataloader) if len(val_dataloader) > 0 else 0
         avg_epoch_val_loss_cls = epoch_val_loss_cls / len(val_dataloader) if len(val_dataloader) > 0 else 0
         avg_epoch_val_loss_bio = epoch_val_loss_bio / len(val_dataloader) if len(val_dataloader) > 0 else 0
         avg_epoch_val_loss_rel = epoch_val_loss_rel / len(val_dataloader) if len(val_dataloader) > 0 else 0
         val_pbar.close()
 
-        # Get evaluation metrics
-        eval_results = eval_fn_metrics(
-            model=model,
-            dataloader=val_dataloader,
-            device=device,
-            id2label_cls=id2label_cls,
-            id2label_bio=id2label_bio,
-            id2label_rel=id2label_rel
-        )
-        current_f1 = eval_results.get("overall_avg_f1", 0.0)
+        # --- Evaluation & Reporting ---
+        # Get detailed evaluation metrics using the provided function
+        eval_results = eval_fn_metrics(model=model, dataloader=val_dataloader, device=device, id2label_cls=id2label_cls, id2label_bio=id2label_bio, id2label_rel=id2label_rel)
+        current_f1 = eval_results.get("overall_avg_f1", 0.0) # Use overall F1 for model selection
 
-        # Store history
-        history["train_loss_total"].append(avg_epoch_train_loss_total)
-        history["train_loss_cls"].append(avg_epoch_train_loss_cls)
-        history["train_loss_bio"].append(avg_epoch_train_loss_bio)
-        history["train_loss_rel"].append(avg_epoch_train_loss_rel)
-        history["val_loss_total"].append(avg_epoch_val_loss_total)
-        history["val_loss_cls"].append(avg_epoch_val_loss_cls)
-        history["val_loss_bio"].append(avg_epoch_val_loss_bio)
-        history["val_loss_rel"].append(avg_epoch_val_loss_rel)
+        # Store all metrics in the history dictionary
+        history["train_loss_total"].append(avg_epoch_train_loss_total); history["train_loss_cls"].append(avg_epoch_train_loss_cls); history["train_loss_bio"].append(avg_epoch_train_loss_bio); history["train_loss_rel"].append(avg_epoch_train_loss_rel)
+        history["val_loss_total"].append(avg_epoch_val_loss_total); history["val_loss_cls"].append(avg_epoch_val_loss_cls); history["val_loss_bio"].append(avg_epoch_val_loss_bio); history["val_loss_rel"].append(avg_epoch_val_loss_rel)
         history["val_overall_f1"].append(current_f1)
 
-        # Print report
+        # --- Model Saving & Early Stopping ---
         new_best_saved_this_epoch = False
+        # Check if the current F1 is better than the best seen so far
         if current_f1 > best_overall_f1:
-            best_overall_f1 = current_f1
-            best_model_state = copy.deepcopy(model.state_dict()) # Store best model state in memory
+            best_overall_f1 = current_f1 # Update best F1
+            best_model_state = copy.deepcopy(model.state_dict()) # Save model state in memory
+            # Save model state to disk if path is provided
             if model_save_path:
-                # Ensure directory exists before saving
-                if os.path.dirname(model_save_path): # Check if path includes a directory
-                    os.makedirs(os.path.dirname(model_save_path), exist_ok=True)
+                save_dir = os.path.dirname(model_save_path)
+                if save_dir and not os.path.exists(save_dir):
+                    os.makedirs(save_dir, exist_ok=True)
                 torch.save(model.state_dict(), model_save_path)
-            patience_counter = 0
+            patience_counter = 0 # Reset patience counter
             new_best_saved_this_epoch = True
         else:
-            patience_counter += 1
-        
-        print_report_fn(
-            epoch_num=epoch_num,
-            num_epochs=num_epochs,
-            avg_train_loss=avg_epoch_train_loss_total,
-            avg_val_loss=avg_epoch_val_loss_total,
-            eval_results=eval_results,
-            best_overall_f1=best_overall_f1,
-            patience_counter=patience_counter,
-            patience_epochs=patience_epochs,
-            new_best_saved=new_best_saved_this_epoch
-        )
+            patience_counter += 1 # Increment patience counter
 
-        # Scheduler step
+        # Print the epoch summary report
+        print_report_fn(epoch_num=epoch_num, num_epochs=num_epochs, avg_train_loss=avg_epoch_train_loss_total, avg_val_loss=avg_epoch_val_loss_total, eval_results=eval_results, best_overall_f1=best_overall_f1, patience_counter=patience_counter, patience_epochs=patience_epochs, new_best_saved=new_best_saved_this_epoch)
+
+        # --- Scheduler Step ---
+        # Update learning rate based on scheduler logic
         if scheduler:
             if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
-                scheduler.step(current_f1) # Or avg_epoch_val_loss_total
+                scheduler.step(current_f1) # Step based on validation F1
             else:
-                scheduler.step()
+                scheduler.step() # Step based on epoch for other schedulers
 
-        # Early stopping
-        if patience_epochs > 0 and patience_counter >= patience_epochs: # Check if patience_epochs is positive
+        # --- Early Stopping Check ---
+        # Stop training if patience limit is reached
+        if patience_epochs > 0 and patience_counter >= patience_epochs:
             print(f"Early stopping triggered after {epoch_num} epochs.")
             break
             
-    # 6. Load Best Model
-    # Load from the in-memory state if it exists, otherwise try loading from file
+    # --- Post-Training ---
+    # Load the best model state found during training
     if best_model_state is not None:
         print(f"Loading best model state (in memory) with F1: {best_overall_f1:.4f}")
         model.load_state_dict(best_model_state)
     elif model_save_path and os.path.exists(model_save_path):
         print(f"Loading best model from {model_save_path}")
-        # Ensure map_location is set if loading on a different device than saved
         model.load_state_dict(torch.load(model_save_path, map_location=device))
     else:
-        print("No best model was saved or found. Returning the model from the last training epoch.")
+        print("No best model was saved or found. Returning model from last epoch.")
 
-    # Save training history as JSON in the same directory as the model weights
-    import json
-    history_save_path = os.path.join(os.path.dirname(model_save_path), "training_history.json")
-    with open(history_save_path, "w") as f:
-        json.dump(history, f, indent=2)
-    print(f"Training history saved to {history_save_path}")
+    # Save the training history to a JSON file
+    if model_save_path:
+        history_save_path = os.path.join(os.path.dirname(model_save_path) or ".", "training_history.json")
+        try:
+            with open(history_save_path, "w") as f: json.dump(history, f, indent=2)
+            print(f"Training history saved to {history_save_path}")
+        except Exception as e: print(f"Error saving training history to {history_save_path}: {e}")
+    else: print("model_save_path not provided. Training history not saved.")
 
+    # Return the best model and its training history
     return model, history
 
-# Example of how you might call this (assuming other components are defined):
+# Example Usage:
 # if __name__ == '__main__':
-    # This is a placeholder for a full runnable example.
-    # You would need to:
-    # 1. Define/Import JointCausalModel, your evaluate_model, print_eval_report
-    # 2. Prepare DataLoaders (train_dataloader, val_dataloader)
-    # 3. Define id2label maps
-    # 4. Instantiate the model and optimizer
-    
-    # print("This is a draft training function. See comments for usage.")
+#     # --- For training on Llama3-annotated (silver) data with GCE and specific task weights ---
+#     # silver_task_weights = {"cls": 1.0, "bio": 4.0, "rel": 1.0} # Example weights
+#     # trained_model_silver, history_silver = train_model(
+#     #     model=my_model_instance,
+#     #     train_dataloader=silver_train_loader,
+#     #     val_dataloader=expert_val_loader, # Always validate on expert data
+#     #     optimizer=my_optimizer,
+#     #     num_epochs=20,
+#     #     device=DEVICE,
+#     #     # ... other necessary params like id2label maps, eval_fn, print_fn ...
+#     #     is_silver_training=True, # This will enable GCE
+#     #     gce_q_value=0.7,
+#     #     task_loss_weights=silver_task_weights,
+#     #     cls_class_weights=silver_cls_class_weights, # Class weights for silver data
+#     #     bio_class_weights=silver_bio_class_weights,
+#     #     rel_class_weights=silver_rel_class_weights
+#     # )
 
-    # from crf_model import JointCausalModel # Assuming this is your model class
-    # from evaluate_joint_causal_model import evaluate_model as eval_fn_metrics_impl
-    # from evaluate_joint_causal_model import print_eval_report as print_report_fn_impl
-    # # Dummy Dataloaders and other components would be needed here for a runnable example
-    # # ...
+#     # --- For fine-tuning on expert-annotated (gold) data with CrossEntropy ---
+#     # gold_task_weights = {"cls": 1.0, "bio": 1.0, "rel": 1.0} # Example, could be different
+#     # # Re-initialize optimizer for fine-tuning, often with a lower learning rate
+#     # finetune_optimizer = torch.optim.AdamW(trained_model_silver.parameters(), lr=2e-5)
+#     #
+#     # trained_model_gold, history_gold = train_model(
+#     #     model=trained_model_silver, # Start from the silver-trained model
+#     #     train_dataloader=expert_train_loader,
+#     #     val_dataloader=expert_val_loader,
+#     #     optimizer=finetune_optimizer,
+#     #     num_epochs=10, # Usually fewer epochs for fine-tuning
+#     #     device=DEVICE,
+#     #     # ... other necessary params ...
+#     #     is_silver_training=False, # This will use CrossEntropyLoss
+#     #     task_loss_weights=gold_task_weights,
+#     #     cls_class_weights=expert_cls_class_weights, # Class weights for expert data
+#     #     bio_class_weights=expert_bio_class_weights,
+#     #     rel_class_weights=expert_rel_class_weights
+#     # )
