@@ -86,7 +86,7 @@ You **MUST** output **only** a single JSON object that follows this exact schema
     - A single cause might have multiple effects. List each effect separately under the same cause.
     - A single effect might have multiple causes. List each cause separately leading to the same effect.
     - A sentence can contain multiple independent cause-effect pairs. List them all.
-    - An effect can sometimes become the cause of a subsequent effect (causal chain). List both pairs sequentially.
+    - An effect can sometimes become the cause of a subsequent effect (causal chain). List both pairs sequentially. Remember that such intermediate phrases will appear twice: once as an effect and once as a cause.
     - For each pair, extract the exact Cause phrase and the exact Effect phrase from the sentence. Do not modify, shorten, or extend the phrases. This is true for cause spans as well as effect spans.
     - In a statement like "A causes B by/through/because of C," treat C as the initial necessary factor that produces B, which in turn is required for A to occur; each link in the chain should be evaluated for its necessary and sufficient role.
     - If replacing "when" with "if" or "because" preserves the meaning of one event triggering another, then "when" signals a causal relationship; if not, it merely marks a temporal sequence.
@@ -172,7 +172,6 @@ Output:
     }
   ]
 }
-
 
 
 
@@ -280,7 +279,6 @@ Output:
 
 
 
-
 Input: the cluster analysis results suggest that the built environment is the outcome of mode of governance producing places and contradictions.
 Output:
 {
@@ -323,7 +321,6 @@ Output:
 
 
 
-
 Input: Accumulated total earnings are negatively correlated with the likelihood of repayment.
 Output:
 {
@@ -354,6 +351,93 @@ Output:
   ]
 }
 
+
+Input: Chronic stress suppresses immune function, which in turn reduces the body's ability to fight infection, resulting in prolonged illness.
+Output:
+
+{
+  "text": "Chronic stress suppresses immune function, which in turn reduces the body's ability to fight infection, resulting in prolonged illness.",
+  "causal": true,
+  "relations": [
+    {
+      "cause": "Chronic stress",
+      "effect": "suppresses immune function",
+      "type": "Rel_CE"
+    },
+    {
+      "cause": "suppresses immune function",
+      "effect": "reduces the body's ability to fight infection",
+      "type": "Rel_CE"
+    },
+    {
+      "cause": "reduces the body's ability to fight infection",
+      "effect": "prolonged illness",
+      "type": "Rel_CE"
+    }
+  ]
+}
+
+
+Input: Internalized societal stereotypes trigger stereotype threat, which heightens cognitive load, thereby impairing working memory and subsequently reducing academic performance.
+Output:
+
+{
+  "text": "Internalized societal stereotypes trigger stereotype threat, which heightens cognitive load, thereby impairing working memory and subsequently reducing academic performance.",
+  "causal": true,
+  "relations": [
+    {
+      "cause": "Internalized societal stereotypes",
+      "effect": "stereotype threat",
+      "type": "Rel_CE"
+    },
+    {
+      "cause": "stereotype threat",
+      "effect": "heightens cognitive load",
+      "type": "Rel_CE"
+    },
+    {
+      "cause": "heightens cognitive load",
+      "effect": "impairing working memory",
+      "type": "Rel_CE"
+    },
+    {
+      "cause": "impairing working memory",
+      "effect": "reducing academic performance",
+      "type": "Rel_CE"
+    }
+  ]
+}
+
+
+Input: Persistent economic inequality fuels political polarization, and that polarization erodes institutional trust, which in turn diminishes public compliance with policy measures, eventually exacerbating economic downturns.
+Output:
+
+{
+  "text": "Persistent economic inequality fuels political polarization, and that polarization erodes institutional trust, which in turn diminishes public compliance with policy measures, eventually exacerbating economic downturns.",
+  "causal": true,
+  "relations": [
+    {
+      "cause": "Persistent economic inequality",
+      "effect": "political polarization",
+      "type": "Rel_CE"
+    },
+    {
+      "cause": "political polarization",
+      "effect": "erodes institutional trust",
+      "type": "Rel_CE"
+    },
+    {
+      "cause": "erodes institutional trust",
+      "effect": "diminishes public compliance with policy measures",
+      "type": "Rel_CE"
+    },
+    {
+      "cause": "diminishes public compliance with policy measures",
+      "effect": "exacerbating economic downturns",
+      "type": "Rel_CE"
+    }
+  ]
+}
 
 Now, analyze the following sentence:
 {{SENTENCE}}

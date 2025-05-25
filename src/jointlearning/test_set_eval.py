@@ -28,9 +28,9 @@ except ImportError as e:
     exit()
 
 # --- Configuration ---
-MODEL_PATH = "src/jointlearning/expert_bert_softmax/expert_bert_softmax_model.pt"
+MODEL_PATH = r"C:\Users\norouzin\Desktop\JointLearning\src\jointlearning\expert_bert_softmax\expert_bert_softmax_model.pt"
 TEST_DATA_PATH = (
-    "datasets/expert_multi_task_data/test.csv"  # Path to your test CSV
+    r"C:\Users\norouzin\Desktop\JointLearning\datasets\expert_multi_task_data\test.csv"  # Path to your test CSV
 )
 TOKENIZER_NAME = MODEL_CONFIG.get(
     "encoder_name", "bert-base-uncased"
