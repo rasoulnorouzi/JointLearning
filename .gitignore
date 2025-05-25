@@ -5,3 +5,5 @@ __pycache__/
 src/jointlearning/expert_bert_softmax/
 src/jointlearning/expert_bert_softmax_weakSP/
 src/jointlearning/test_results/
+src/jointlearning/expert_bert_GCE_weakSP/
+src/jointlearning/expert_bert_GCE/
