@@ -1,6 +1,7 @@
 import difflib
 import json
 import re
+from tqdm import tqdm
 
 """
 llsm outputs formatted as:
@@ -245,7 +246,7 @@ def convert_llm_output_to_doccano_format(ollama_data):
     global_entity_id = 1000
     global_relation_id = 500
 
-    for i, item in enumerate(ollama_data):
+    for i, item in enumerate(tqdm(ollama_data, desc="Converting to Doccano format")):
         output_field = item.get("output", "")
         if not output_field or not isinstance(output_field, str):
             print(f"Sample {i+1} has missing or empty 'output' field: {output_field!r}")
@@ -287,43 +288,60 @@ def convert_llm_output_to_doccano_format(ollama_data):
         text = sentence_data["text"]
         entity_map = {}
 
-        for relation in sentence_data.get("relations", []):
-            for role in ["cause", "effect"]:
-                phrase = relation[role]
-                if phrase in entity_map:
-                    continue
+        # Check for non-causal cases first
+        if not sentence_data.get("causal", True) or not sentence_data.get("relations"):
+            entity_id = global_entity_id
+            global_entity_id += 1
+            base["entities"].append({
+                "id": entity_id,
+                "label": "non-causal",
+                "start_offset": 0,
+                "end_offset": len(text)
+            })
+        else:
+            for relation in sentence_data.get("relations", []):
+                for role in ["cause", "effect"]:
+                    phrase = relation.get(role) # Use .get for safety
+                    if not phrase: # Skip if phrase is None or empty
+                        continue
+                    if phrase in entity_map:
+                        continue
 
-                match = re.search(re.escape(phrase), text)
-                if match:
-                    start_offset, end_offset = match.start(), match.end()
-                else:
-                    span = locate_best_matching_span(text, phrase)
-                    if span:
-                        start_offset, end_offset = span
+                    match = re.search(re.escape(phrase), text)
+                    if match:
+                        start_offset, end_offset = match.start(), match.end()
                     else:
-                        continue  # Skip if no match found
+                        span = locate_best_matching_span(text, phrase)
+                        if span:
+                            start_offset, end_offset = span
+                        else:
+                            continue  # Skip if no match found
 
-                entity_id = global_entity_id
-                global_entity_id += 1
-                entity_map[phrase] = entity_id
+                    entity_id = global_entity_id
+                    global_entity_id += 1
+                    entity_map[phrase] = entity_id
 
-                base["entities"].append({
-                    "id": entity_id,
-                    "label": role,
-                    "start_offset": start_offset,
-                    "end_offset": end_offset
-                })
+                    base["entities"].append({
+                        "id": entity_id,
+                        "label": role,
+                        "start_offset": start_offset,
+                        "end_offset": end_offset
+                    })
 
-            cause_id = entity_map.get(relation["cause"])
-            effect_id = entity_map.get(relation["effect"])
-            if cause_id is not None and effect_id is not None:
-                base["relations"].append({
-                    "id": global_relation_id,
-                    "from_id": cause_id,
-                    "to_id": effect_id,
-                    "type": relation["polarity"].lower()
-                })
-                global_relation_id += 1
+                cause_id = entity_map.get(relation.get("cause", "")) # Use .get with default for safety
+                effect_id = entity_map.get(relation.get("effect", "")) # Use .get with default for safety
+
+                if cause_id is not None and effect_id is not None:
+                    # Polarity processing removed as per user request
+                    doccano_relation_type = "Rel_CE" # Default value
+
+                    base["relations"].append({
+                        "id": global_relation_id,
+                        "from_id": cause_id,
+                        "to_id": effect_id,
+                        "type": doccano_relation_type
+                    })
+                    global_relation_id += 1
 
         doccano_formatted.append(base)
 
@@ -377,3 +395,12 @@ with open("annotation_datasets/doccano_gemma312b.jsonl", "w", encoding="utf-8") 
         f.write(json.dumps(sample, ensure_ascii=False) + "\n")
 
 """
+llama38b_path  = r"C:/Users/norouzin/Desktop/JointLearning/src/causal_pseudo_labeling/llama3_8b_raw.jsonl"
+with open(llama38b_path, "r", encoding="utf-8") as f:
+    parsed_lines = [json.loads(line) for line in f.readlines()]
+    llama38b_data = [{"output": text_content} for text_content in parsed_lines]
+doccano_llama38b = convert_llm_output_to_doccano_format(llama38b_data)
+# Save the Doccano formatted data to a JSON file
+with open("C:/Users/norouzin/Desktop/JointLearning/src/causal_pseudo_labeling/annotation_datasets/doccano_llama38b.jsonl", "w", encoding="utf-8") as f:
+    for sample in doccano_llama38b:
+        f.write(json.dumps(sample, ensure_ascii=False) + "\n")
