@@ -2,6 +2,7 @@ import numpy as np
 import torch
 import pandas as pd
 from config import DATASET_CONFIG
+from model import JointCausalModel
 
 
 def compute_class_weights(
@@ -263,3 +264,62 @@ def label_value_counts(dataset_instance):
         "bio_labels_flat": bio_labels_flat,
         "rel_labels_flat": rel_labels_flat
     }
+
+
+def freeze_encoder_layers(model: JointCausalModel) -> None:
+    """Freezes the encoder layers of the given JointCausalModel instance.
+
+    This function sets the `requires_grad` attribute of all parameters
+    in the model's encoder (`model.enc`) to `False`. This is typically
+    done when you want to fine-tune only the task-specific heads of a
+    pre-trained model, keeping the encoder's weights fixed.
+
+    The head layers (`model.cls_head`, `model.bio_head`, `model.rel_head`)
+    will have their parameters' `requires_grad` attribute set to `True`,
+    ensuring they are trainable.
+
+    Args:
+        model (JointCausalModel): An instance of the JointCausalModel.
+
+    Returns:
+        None: The model is modified in-place.
+
+    Example:
+        >>> # Assume MODEL_CONFIG is defined and JointCausalModel is imported
+        >>> # from jointlearning.model import JointCausalModel, freeze_encoder_layers
+        >>> # from config import MODEL_CONFIG # Or .config if in a package
+        >>>
+        >>> # Initialize the model
+        >>> # model_instance = JointCausalModel(
+        >>> #     encoder_name="bert-base-uncased",
+        >>> #     num_cls_labels=MODEL_CONFIG["num_cls_labels"],
+        >>> #     num_bio_labels=MODEL_CONFIG["num_bio_labels"],
+        >>> #     num_rel_labels=MODEL_CONFIG["num_rel_labels"],
+        >>> #     dropout=MODEL_CONFIG["dropout"]
+        >>> # )
+        >>>
+        >>> # Freeze the encoder layers
+        >>> # freeze_encoder_layers(model_instance)
+        >>>
+        >>> # Verify (optional)
+        >>> # for name, param in model_instance.enc.named_parameters():
+        >>> #     assert not param.requires_grad, f"{name} is not frozen"
+        >>> # for name, param in model_instance.cls_head.named_parameters():
+        >>> #     assert param.requires_grad, f"{name} is not trainable"
+        >>>
+        >>> # Now the model_instance is ready for training with a frozen encoder
+        >>> # optimizer = torch.optim.AdamW(
+        >>> #     filter(lambda p: p.requires_grad, model_instance.parameters()), lr=1e-4
+        >>> # )
+        >>> # ... proceed with training loop ...
+    """
+    if hasattr(model, 'enc') and model.enc is not None:
+        for param in model.enc.parameters():
+            param.requires_grad = False
+    # Ensure head layers remain trainable (they should be by default after initialization)
+    for head_name in ['cls_head', 'bio_head', 'rel_head']:
+        if hasattr(model, head_name):
+            head = getattr(model, head_name)
+            if head is not None:
+                for param in head.parameters():
+                    param.requires_grad = True

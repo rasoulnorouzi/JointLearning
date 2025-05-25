@@ -3,4 +3,5 @@ __pycache__/
 *.pyc
 *.ipynb_checkpoints/
 src/jointlearning/expert_bert_softmax/
+src/jointlearning/expert_bert_softmax_weakSP/
 src/jointlearning/test_results/

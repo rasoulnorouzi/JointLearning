@@ -22,9 +22,9 @@ MODEL_CONFIG = {
 # Training configuration
 TRAINING_CONFIG = {
     "batch_size": 16,
-    "num_epochs": 20,
-    "learning_rate": 5e-5,
-    "weight_decay": 1.0,
+    "num_epochs": 10,
+    "learning_rate": 1e-5,
+    "weight_decay": 0.1,
     "gradient_clip_val": 1.0,
     "apply_gradient_clipping": True,
     "patience_epochs": 10,

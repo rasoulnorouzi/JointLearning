@@ -83,13 +83,19 @@ class CausalDataset(Dataset):
         self.negative_relation_rate = negative_relation_rate
         self.max_random_span_len = max_random_span_len
 
-        def safe_json_loads(data_str):
-            try:
-                if isinstance(data_str, str): return json.loads(data_str.replace("'", "\""))
-                return []
-            except: return []
-        self.dataframe.loc[:, 'entities_parsed'] = self.dataframe['entities'].apply(safe_json_loads)
-        self.dataframe.loc[:, 'relations_parsed'] = self.dataframe['relations'].apply(safe_json_loads)
+        def _safe_to_obj(x):
+            if isinstance(x, str):               # column is a JSON-looking string
+                try:
+                    return json.loads(x.replace("'", '"'))
+                except Exception:
+                    return []
+            if isinstance(x, (list, dict)):      # already parsed
+                return x
+            return []                            # NaN / None / anything else
+
+# parse once and cache in new columns
+        self.dataframe['entities_parsed']  = self.dataframe['entities'].apply(_safe_to_obj)
+        self.dataframe['relations_parsed'] = self.dataframe['relations'].apply(_safe_to_obj)
 
     def __len__(self):
         """Returns the total number of samples in the dataset."""
