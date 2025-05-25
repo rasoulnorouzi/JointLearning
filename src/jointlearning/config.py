@@ -22,11 +22,11 @@ MODEL_CONFIG = {
 # Training configuration
 TRAINING_CONFIG = {
     "batch_size": 16,
-    "num_epochs": 10,
-    "learning_rate": 1e-5,
-    "weight_decay": 0.1,
+    "num_epochs": 30,
+    "learning_rate": 5e-5,
+    "weight_decay": 0.01,
     "gradient_clip_val": 1.0,
-    "apply_gradient_clipping": True,
+    "apply_gradient_clipping": False,
     "patience_epochs": 10,
     "model_save_path": "best_joint_causal_model.pt",
 }

@@ -17,7 +17,7 @@ print(f"id2label_bio: {id2label_bio}")
 print(f"id2label_rel: {id2label_rel}")
 
 tokenizer = AutoTokenizer.from_pretrained(MODEL_CONFIG["encoder_name"])
-model_path = r"C:\Users\norouzin\Desktop\JointLearning\src\jointlearning\expert_bert_softmax\expert_bert_softmax_model.pt"
+model_path = r"/home/rnorouzini/JointLearning/src/jointlearning/expert_bert_GCE_Softmax_Normal/expert_bert_GCE_Softmax_Normal_model.pt"
 model = JointCausalModel(**MODEL_CONFIG)
 model.load_state_dict(torch.load(model_path, map_location=device))
 model.to(device)
@@ -55,8 +55,7 @@ for i, text_sample in enumerate(test):
     with torch.no_grad(): # Ensure no gradients are calculated during inference
         result = model(
             input_ids=tokenized_input["input_ids"],
-            attention_mask=tokenized_input["attention_mask"],
-            token_type_ids=tokenized_input["token_type_ids"]
+            attention_mask=tokenized_input["attention_mask"]
         )
 
     # %%
@@ -80,21 +79,3 @@ for i, text_sample in enumerate(test):
     
     print("-" * 20)
 
-# %%
-# The following lines are commented out as they are processed inside the loop now.
-# print(torch.argmax(result["cls_logits"], dim=-1))
-# # %%
-# bio_emissions = result["bio_emissions"]
-# # argmax_bio
-
-# argmax_bio = torch.argmax(bio_emissions, dim=-1)
-# print(argmax_bio)
-# # %%
-# # print tokenized words
-# tokens = tokenizer.convert_ids_to_tokens(tokenized_input["input_ids"][0])
-# print(tokens)
-# print(len(tokens))
-# print(len(argmax_bio[0]))
-# map_tokens_to_bio = {token: id2label_bio[label.item()] for token, label in zip(tokens, argmax_bio[0])}
-# print(map_tokens_to_bio)
-# %%
