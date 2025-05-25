@@ -227,126 +227,107 @@ def safe_json_loads(s):
 
 def convert_llm_output_to_doccano_format(ollama_data):
     """
-    Converts LLM-generated causal annotations to Doccano JSON format.
+    Transform LLM outputs into Doccano JSON-Lines.
 
-    This function reads LLM outputs (containing sentences and structured causal relationships)
-    and transforms them into a format compatible with Doccano, including:
-    - Generating token span offsets for each cause and effect phrase using exact and fuzzy matching
-    - Assigning unique IDs to entities and relations
-    - Normalizing polarity values
-    - Structuring output as expected by Doccano with keys: id, text, entities, relations, Comments
+    Rules enforced here
+    -------------------
+    • Causal sentence  = at least one relation WHERE
+        – 'cause'  is a non-empty string AND
+        – 'effect' is a non-empty string
+      Everything else is tagged as non-causal.
 
-    Parameters:
-        ollama_data (list[dict]): A list of LLM annotation outputs, each with "sentence" and "output" fields.
-
-    Returns:
-        list[dict]: Doccano-compatible formatted data.
+    • Partial relations (only cause OR only effect) are
+      recorded in `Comments` but NOT exported to Doccano.
     """
-    doccano_formatted = []
-    global_entity_id = 1000
-    global_relation_id = 500
+    doccano_formatted   = []
+    global_entity_id    = 1_000
+    global_relation_id  =   500
 
-    for i, item in enumerate(tqdm(ollama_data, desc="Converting to Doccano format")):
-        output_field = item.get("output", "")
-        if not output_field or not isinstance(output_field, str):
-            print(f"Sample {i+1} has missing or empty 'output' field: {output_field!r}")
-            # Instead of continue, add a minimal record with empty text
-            base = {
-                "id": i+1,
-                "text": "",
-                "entities": [],
-                "relations": [],
-                "Comments": ["Invalid or missing output field"]
-            }
-            doccano_formatted.append(base)
-            continue
-        # Clean up possible code block or stray backticks
-        output_field = clean_json_code_block(output_field)
-        sentence_data = safe_json_loads(output_field)
-        if sentence_data is None:
-            # Try to extract text field manually
-            text_match = re.search(r'"text"\s*:\s*"([^"]*)"', output_field)
-            text_val = text_match.group(1) if text_match else ""
-            base = {
-                "id": i+1,
-                "text": text_val,
-                "entities": [],
-                "relations": [],
-                "Comments": ["Could not parse output field as JSON"]
-            }
-            doccano_formatted.append(base)
-            continue
+    for i, item in enumerate(tqdm(ollama_data, desc="Converting")):
+        output_raw = clean_json_code_block(item.get("output", ""))
+
+        # Always land on a dict with the three keys
+        sd = safe_json_loads(output_raw)
+
+        text       = sd["text"]
+        rel_raw    = sd.get("relations", []) or []
+        # keep only **complete** relations
+        rel_valid  = [r for r in rel_raw if r.get("cause") and r.get("effect")]
+
+        # final causal flag (rule-based)
+        is_causal  = bool(rel_valid) and sd.get("causal", True) is True
 
         base = {
-            "id": i+1,
-            "text": sentence_data["text"],
-            "entities": [],
-            "relations": [],
-            "Comments": []
+            "id"        : i + 1,
+            "text"      : text,
+            "entities"  : [],
+            "relations" : [],
+            "Comments"  : []
         }
 
-        text = sentence_data["text"]
-        entity_map = {}
+        # record dropped partial relations for audit
+        dropped = [r for r in rel_raw if r not in rel_valid]
+        if dropped:
+            base["Comments"].append(
+                f"{len(dropped)} partial relation(s) ignored (cause xor effect missing)"
+            )
 
-        # Check for non-causal cases first
-        if not sentence_data.get("causal", True) or not sentence_data.get("relations"):
-            entity_id = global_entity_id
-            global_entity_id += 1
+        if not is_causal:
+            # ONE span covering the whole sentence
             base["entities"].append({
-                "id": entity_id,
-                "label": "non-causal",
-                "start_offset": 0,
-                "end_offset": len(text)
+                "id"           : global_entity_id,
+                "label"        : "non-causal",
+                "start_offset" : 0,
+                "end_offset"   : len(text)
             })
-        else:
-            for relation in sentence_data.get("relations", []):
-                for role in ["cause", "effect"]:
-                    phrase = relation.get(role) # Use .get for safety
-                    if not phrase: # Skip if phrase is None or empty
-                        continue
-                    if phrase in entity_map:
-                        continue
+            global_entity_id += 1
+            doccano_formatted.append(base)
+            continue
 
-                    match = re.search(re.escape(phrase), text)
-                    if match:
-                        start_offset, end_offset = match.start(), match.end()
-                    else:
-                        span = locate_best_matching_span(text, phrase)
-                        if span:
-                            start_offset, end_offset = span
-                        else:
-                            continue  # Skip if no match found
+        # ---- causal path --------------------------------------------------
+        ent_index = {}                   # phrase ➜ entity_id
 
-                    entity_id = global_entity_id
-                    global_entity_id += 1
-                    entity_map[phrase] = entity_id
+        for rel in rel_valid:
+            for role in ("cause", "effect"):
+                phrase = rel[role]
+                if phrase in ent_index:
+                    continue
 
-                    base["entities"].append({
-                        "id": entity_id,
-                        "label": role,
-                        "start_offset": start_offset,
-                        "end_offset": end_offset
-                    })
+                # try exact, then fuzzy match
+                exact = re.search(re.escape(phrase), text)
+                span  = exact.span() if exact else locate_best_matching_span(text, phrase)
+                if not span:
+                    base["Comments"].append(
+                        f"Could not locate {role} phrase: '{phrase}'"
+                    )
+                    continue
 
-                cause_id = entity_map.get(relation.get("cause", "")) # Use .get with default for safety
-                effect_id = entity_map.get(relation.get("effect", "")) # Use .get with default for safety
+                ent_id = global_entity_id
+                global_entity_id += 1
+                ent_index[phrase] = ent_id
 
-                if cause_id is not None and effect_id is not None:
-                    # Polarity processing removed as per user request
-                    doccano_relation_type = "Rel_CE" # Default value
+                base["entities"].append({
+                    "id"           : ent_id,
+                    "label"        : role,
+                    "start_offset" : span[0],
+                    "end_offset"   : span[1]
+                })
 
-                    base["relations"].append({
-                        "id": global_relation_id,
-                        "from_id": cause_id,
-                        "to_id": effect_id,
-                        "type": doccano_relation_type
-                    })
-                    global_relation_id += 1
+            # only add relation if BOTH ends were found
+            c_id = ent_index.get(rel["cause"])
+            e_id = ent_index.get(rel["effect"])
+            if c_id and e_id:
+                base["relations"].append({
+                    "id"      : global_relation_id,
+                    "from_id" : c_id,
+                    "to_id"   : e_id,
+                    "type"    : "Rel_CE"
+                })
+                global_relation_id += 1
 
         doccano_formatted.append(base)
 
     return doccano_formatted
-
 
 """
 How to use: 
@@ -395,12 +376,12 @@ with open("annotation_datasets/doccano_gemma312b.jsonl", "w", encoding="utf-8") 
         f.write(json.dumps(sample, ensure_ascii=False) + "\n")
 
 """
-llama38b_path  = r"C:/Users/norouzin/Desktop/JointLearning/src/causal_pseudo_labeling/llama3_8b_raw.jsonl"
+llama38b_path  = r"C:\Users\norouzin\Desktop\JointLearning\datasets\pseudo_annotate_data\llama3_8b_raw.jsonl"
 with open(llama38b_path, "r", encoding="utf-8") as f:
     parsed_lines = [json.loads(line) for line in f.readlines()]
     llama38b_data = [{"output": text_content} for text_content in parsed_lines]
 doccano_llama38b = convert_llm_output_to_doccano_format(llama38b_data)
 # Save the Doccano formatted data to a JSON file
-with open("C:/Users/norouzin/Desktop/JointLearning/src/causal_pseudo_labeling/annotation_datasets/doccano_llama38b.jsonl", "w", encoding="utf-8") as f:
+with open("C:\\Users\\norouzin\\Desktop\\JointLearning\\src\\causal_pseudo_labeling\\annotation_datasets\\doccano_llama38b.jsonl", "w", encoding="utf-8") as f:
     for sample in doccano_llama38b:
         f.write(json.dumps(sample, ensure_ascii=False) + "\n")
