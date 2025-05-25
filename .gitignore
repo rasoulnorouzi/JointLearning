@@ -3,4 +3,4 @@ __pycache__/
 *.pyc
 *.ipynb_checkpoints/
 src/jointlearning/expert_bert_softmax/
-src/jointlearning/test_results/
+src/jointlearning/test_results/expert_bert_softmax.tar.gz
