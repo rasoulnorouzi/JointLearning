@@ -115,7 +115,7 @@ def train_model(
         print(f"Scheduler: {scheduler.__class__.__name__}")
     else:
         print(f"Scheduler: None")
-    print(f"Max Grad Norm: {max_grad_norm if max_grad_norm is not None else 'Disabled'} (Mode: L2 norm if enabled)")
+    print(f"Gradient Clipping: {'Enabled' if max_grad_norm is not None else 'Disabled'} (Max Norm: {max_grad_norm if max_grad_norm is not None else 'N/A'})")
     print(f"Early Stopping Patience: {patience_epochs if patience_epochs > 0 else 'Disabled'}")
     print(f"Model Save Path: {model_save_path if model_save_path else 'Not saving model to disk'}")
     print(f"Mode: {'Silver Data Training (GCE)' if is_silver_training else 'Standard Training (CrossEntropy)'}")
