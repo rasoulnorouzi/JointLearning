@@ -17,7 +17,7 @@ print(f"id2label_bio: {id2label_bio}")
 print(f"id2label_rel: {id2label_rel}")
 
 tokenizer = AutoTokenizer.from_pretrained(MODEL_CONFIG["encoder_name"])
-model_path = r"/home/rnorouzini/JointLearning/src/jointlearning/expert_bert_GCE_Softmax_Normal/expert_bert_GCE_Softmax_Normal_model.pt"
+model_path = r"src\jointlearning\expert_bert_GCE_Softmax_Normal\expert_bert_GCE_Softmax_Normal_model.pt"
 model = JointCausalModel(**MODEL_CONFIG)
 model.load_state_dict(torch.load(model_path, map_location=device))
 model.to(device)
@@ -36,7 +36,11 @@ test = ["promoting ri might reduce risk factors for drug use and enhance the eff
         "exercise improves physical health and mental well-being",
         "Permitting continuous rather than binary ''all-or-nothing'' contributions significantly increases contributions and facilitates provision.",
         "according to smith (2008), there is a need for substantial and consistent support and encouragement for women to participate in studies.",
-        "thus, experiencing a task that leads to decrements in feelings of relatedness may affect people's ability to experience intrinsic motivation by also influencing people's mood.;;"
+        "thus, experiencing a task that leads to decrements in feelings of relatedness may affect people's ability to experience intrinsic motivation by also influencing people's mood.;;",
+        "It is instructive to contrast this estimate to the one in the previous section, based on the very simple, two-parameter (g, q) model.;;",
+        "she also recognized that structurally disadvantaged communities supply the black and brown bodies that fill chicago's jail and illinois's prisons (lavigne et al.;;",
+        "the effect of constrained communication and limited information 623 communication, the content of the communication may also reveal which kind of information is more important to the participants.;;",
+        "the subjects who were dependent on the other for future aid increased their level of help giving across the trials.;;"
         ]
 
 for i, text_sample in enumerate(test):
