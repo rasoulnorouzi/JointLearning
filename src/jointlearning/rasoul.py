@@ -17,7 +17,7 @@ print(f"id2label_bio: {id2label_bio}")
 print(f"id2label_rel: {id2label_rel}")
 
 tokenizer = AutoTokenizer.from_pretrained(MODEL_CONFIG["encoder_name"])
-model_path = r"src\jointlearning\expert_bert_GCE_Softmax_Normal\expert_bert_GCE_Softmax_Normal_model.pt"
+model_path = r"src\jointlearning\expert_bert_softmax\expert_bert_softmax_model.pt"
 model = JointCausalModel(**MODEL_CONFIG)
 model.load_state_dict(torch.load(model_path, map_location=device))
 model.to(device)
@@ -40,7 +40,10 @@ test = ["promoting ri might reduce risk factors for drug use and enhance the eff
         "It is instructive to contrast this estimate to the one in the previous section, based on the very simple, two-parameter (g, q) model.;;",
         "she also recognized that structurally disadvantaged communities supply the black and brown bodies that fill chicago's jail and illinois's prisons (lavigne et al.;;",
         "the effect of constrained communication and limited information 623 communication, the content of the communication may also reveal which kind of information is more important to the participants.;;",
-        "the subjects who were dependent on the other for future aid increased their level of help giving across the trials.;;"
+        "the subjects who were dependent on the other for future aid increased their level of help giving across the trials.;;",
+        "instead, depleted participants were more modest in their predictions and more accurate in their predictions than nondepleted participants.;;",
+        "the perceived consequences of turning to others for social support, therefore, may influence the expression of pain.;;",
+        "moreover, in the context of cooperation in organizational and legal settings, de cremer and tyler (2007) showed that if a party communicates intentions to listen to others and take their interests at heart, cooperative decision making is only promoted if this other is seen as honest and trustworthy.;;"
         ]
 
 for i, text_sample in enumerate(test):
