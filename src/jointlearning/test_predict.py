@@ -7,10 +7,18 @@ import json
 import torch
 from transformers import AutoTokenizer
 from model import JointCausalModel
+try:
+    from .config import MODEL_CONFIG, id2label_bio, id2label_cls
+    from .model import JointCausalModel
+except ImportError:
+    from config import MODEL_CONFIG, id2label_bio, id2label_cls  # type: ignore
+    from model import JointCausalModel  # type: ignore
 
 # Load model (adjust path or repo as needed)
 # If you have a local checkpoint, use the path. Otherwise, use the HuggingFace repo name.
-MODEL_PATH = "src/jointlearning/expert_bert_GCE_Softmax_Normal/hf_exper_bert_GCE_Softmax_Normal"  # <-- CHANGE THIS to your model path or repo
+MODEL_PATH = "src\jointlearning\expert_bert_GCE_Softmax_Normal\expert_bert_GCE_Softmax_Normal_model.pt"  # <-- CHANGE THIS to your model path or repo
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+TOKENIZER = AutoTokenizer.from_pretrained(MODEL_CONFIG["encoder_name"])
 
 def main():
     # Test sentences (same as in docstring/example)
@@ -34,16 +42,20 @@ def main():
     ]
 
     # Load model and tokenizer
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = JointCausalModel.from_pretrained(MODEL_PATH).to(device)
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH)
+    # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # model = JointCausalModel.from_pretrained(MODEL_PATH).to(device)
+    # tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH)
+
+    model=JointCausalModel(**MODEL_CONFIG)
+    model.load_state_dict(torch.load("src\\jointlearning\\expert_bert_GCE_Softmax_Normal\\expert_bert_GCE_Softmax_Normal_model.pt",map_location=DEVICE))
+    model.to(DEVICE).eval(); 
 
     # Run prediction (using the same settings as before)
     results = model.predict(
         test_sents,
-        tokenizer=tokenizer,
-        rel_mode="head",           # or "auto"
-        rel_threshold=1.0,         # adjust as needed
+        tokenizer=TOKENIZER,
+        rel_mode="auto",           # or "auto"
+        rel_threshold=0.5,         # adjust as needed
         cause_decision="cls+span" # or "cls_only", "span_only"
     )
 
