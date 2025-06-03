@@ -43,7 +43,9 @@ test = ["promoting ri might reduce risk factors for drug use and enhance the eff
         "the subjects who were dependent on the other for future aid increased their level of help giving across the trials.;;",
         "instead, depleted participants were more modest in their predictions and more accurate in their predictions than nondepleted participants.;;",
         "the perceived consequences of turning to others for social support, therefore, may influence the expression of pain.;;",
-        "moreover, in the context of cooperation in organizational and legal settings, de cremer and tyler (2007) showed that if a party communicates intentions to listen to others and take their interests at heart, cooperative decision making is only promoted if this other is seen as honest and trustworthy.;;"
+        "moreover, in the context of cooperation in organizational and legal settings, de cremer and tyler (2007) showed that if a party communicates intentions to listen to others and take their interests at heart, cooperative decision making is only promoted if this other is seen as honest and trustworthy.;;",
+        "A significant rise in local unemployment rates is a primary driver of increased property crime in the metropolitan area.",
+        "Consistent and responsive caregiving in the first year of life is a crucial factor in the development of a secure attachment style in children."
         ]
 
 for i, text_sample in enumerate(test):
@@ -64,6 +66,7 @@ for i, text_sample in enumerate(test):
             input_ids=tokenized_input["input_ids"],
             attention_mask=tokenized_input["attention_mask"]
         )
+    print(result)
 
     # %%
     cls_prediction = torch.argmax(result["cls_logits"], dim=-1)
