@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 from transformers import AutoModel
 from huggingface_hub import PyTorchModelHubMixin
+from dataclasses import dataclass
 
 try:
     from .config import MODEL_CONFIG, id2label_bio, id2label_rel, id2label_cls
@@ -13,7 +14,6 @@ except ImportError:
 # ---------------------------------------------------------------------------
 # Type aliases & label maps
 # ---------------------------------------------------------------------------
-Span = Tuple[int, int]  # inclusive indices (token indices)
 label2id_bio = {v: k for k, v in id2label_bio.items()}
 label2id_rel = {v: k for k, v in id2label_rel.items()}
 label2id_cls = {v: k for k, v in id2label_cls.items()}
@@ -42,6 +42,18 @@ Usage overview
 Implementation
 ---------------------------------------------------------------------------
 """
+
+
+# ---------------------------------------------------------------------------
+# Span dataclass
+# ---------------------------------------------------------------------------
+@dataclass
+class Span:
+    role: str
+    start_tok: int
+    end_tok: int
+    text: str
+    is_virtual: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -266,8 +278,8 @@ class JointCausalModel(nn.Module, PyTorchModelHubMixin):
                     bio_tmp = res_tmp["bio_emissions"].squeeze(0).argmax(-1).tolist()
                     tok_tmp = tokenizer.convert_ids_to_tokens(enc["input_ids"].squeeze(0))
                     lab_tmp = [id2label_bio[i] for i in bio_tmp]
-                    fixed_tmp = self._apply_bio_rules(tok_tmp, lab_tmp)
-                    spans_tmp = self._merge_spans(tok_tmp, fixed_tmp)
+                    fixed_tmp = JointCausalModel._apply_bio_rules(tok_tmp, lab_tmp)
+                    spans_tmp = JointCausalModel._merge_spans(tok_tmp, fixed_tmp)
                     c_spans = [s for s in spans_tmp if s.role in ("C", "CE")]
                     e_spans = [s for s in spans_tmp if s.role in ("E", "CE")]
                     pair_batch = []
@@ -298,9 +310,9 @@ class JointCausalModel(nn.Module, PyTorchModelHubMixin):
             bio = res["bio_emissions"].squeeze(0).argmax(-1).tolist()
             tok = tokenizer.convert_ids_to_tokens(enc["input_ids"].squeeze(0))
             lab = [id2label_bio[i] for i in bio]
-            fixed = self._apply_bio_rules(tok, lab)
-            spans = self._merge_spans(tok, fixed)
-            causal = self._decide_causal(cls, spans, cause_decision)
+            fixed = JointCausalModel._apply_bio_rules(tok, lab)
+            spans = JointCausalModel._merge_spans(tok, fixed)
+            causal = JointCausalModel._decide_causal(cls, spans, cause_decision)
             if not causal:
                 outs.append({"text": txt, "causal": False, "relations": []})
                 continue
@@ -376,6 +388,10 @@ class JointCausalModel(nn.Module, PyTorchModelHubMixin):
         Apply post-processing rules to BIO tags to fix inconsistencies and clean up spans.
         - Fixes mixed-role spans, punctuation, short tokens, and CE disambiguation.
         """
+        # Constants for punctuation, stopwords, and connectors
+        _PUNCT = {".",",",";",":","?","!","(",")","[","]","{","}"}
+        _STOPWORD_KEEP = {"this","that","these","those","it","they"}
+        
         rep, n = lab.copy(), len(tok)
         def blocks():
             i=0
@@ -393,32 +409,60 @@ class JointCausalModel(nn.Module, PyTorchModelHubMixin):
                     if 1 in {split-s,e-split+1}:
                         maj=roles[0] if split-s>e-split+1 else roles[-1]
                         for j in range(s,e+1): rep[j]=f"B-{maj}" if j==s else f"I-{maj}"
+        # B‑2: Remove labels from punctuation
+        for i,t in enumerate(tok):
+            if rep[i]!="O" and t in _PUNCT: rep[i]="O"
+        # helper: extract labeled blocks
+        def labeled(v):
+            i=0; out=[]
+            while i<n:
+                if v[i]=="O": i+=1; continue
+                s=i; role=v[i].split("-")[-1]
+                while i+1<n and v[i+1]!="O": i+=1
+                out.append((s,i,role)); i+=1
+            return out
+        bl=labeled(rep)
+        # B‑4: Disambiguate CE to C or E if only one present
+        if any(r=="CE" for *_,r in bl):
+            cntc=sum(1 for *_,r in bl if r=="C"); cnte=sum(1 for *_,r in bl if r=="E")
+            if cntc==0 or cnte==0:
+                tr="C" if cntc==0 else "E"
+                for s,e,r in bl:
+                    if r=="CE":
+                        for idx in range(s,e+1): rep[idx]=f"B-{tr}" if idx==s else f"I-{tr}"
+                bl=labeled(rep)
+        # B‑5/6: Remove labels from short/stopword tokens and trailing punctuation
+        for s,e,_ in bl:
+            if tok[e] in _PUNCT: rep[e]="O"
+            if e==s and len(tok[s])<=2 and tok[s].lower() not in _STOPWORD_KEEP: rep[s]="O"
         return rep
 
     @staticmethod
     def _merge_spans(tok, lab):
-        class SpanObj:
-            def __init__(self, role, start_tok, end_tok, text):
-                self.role = role
-                self.start_tok = start_tok
-                self.end_tok = end_tok
-                self.text = text
-        spans = []
-        n = len(tok)
-        i = 0
-        while i < n:
-            if lab[i].startswith("B-"):
-                role = lab[i][2:]
-                start = i
-                end = i
-                while end+1 < n and lab[end+1].startswith("I-") and lab[end+1][2:] == role:
-                    end += 1
-                text = " ".join(tok[start:end+1]).replace(" ##","")
-                spans.append(SpanObj(role, start, end, text))
-                i = end + 1
-            else:
-                i += 1
-        return spans
+        """
+        Merge contiguous labeled tokens into Span objects, gluing across connectors.
+        """
+        from transformers import AutoTokenizer
+        try:
+            from .config import MODEL_CONFIG
+        except ImportError:
+            from config import MODEL_CONFIG
+        tokenizer = AutoTokenizer.from_pretrained(MODEL_CONFIG["encoder_name"])
+        _CONNECTORS = {"of","to","with","for","the"}
+        spans=[]; i=0
+        while i<len(tok):
+            if lab[i]=="O": i+=1; continue
+            role=lab[i].split("-")[-1]; s=i
+            while i+1<len(tok) and lab[i+1]!="O": i+=1
+            spans.append(Span(role,s,i,tokenizer.convert_tokens_to_string(tok[s:i+1])))
+            i+=1
+        merged=[spans[0]] if spans else []
+        for sp in spans[1:]:
+            prv=merged[-1]
+            if sp.role==prv.role and sp.start_tok==prv.end_tok+2 and tok[prv.end_tok+1].lower() in _CONNECTORS:
+                merged[-1]=Span(prv.role,prv.start_tok,sp.end_tok,tokenizer.convert_tokens_to_string(tok[prv.start_tok:sp.end_tok+1]),prv.is_virtual)
+            else: merged.append(sp)
+        return merged
 
     @staticmethod
     def _decide_causal(cls, spans, mode):

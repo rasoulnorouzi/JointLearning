@@ -16,13 +16,20 @@ except ImportError:
 
 # Load model (adjust path or repo as needed)
 # If you have a local checkpoint, use the path. Otherwise, use the HuggingFace repo name.
-MODEL_PATH = "src\jointlearning\expert_bert_GCE_Softmax_Normal\expert_bert_GCE_Softmax_Normal_model.pt"  # <-- CHANGE THIS to your model path or repo
+MODEL_PATH = r"C:\Users\norouzin\Desktop\JointLearning\src\jointlearning\expert_bert_softmax\expert_bert_softmax_model.pt"  # <-- CHANGE THIS to your model path or repo
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 TOKENIZER = AutoTokenizer.from_pretrained(MODEL_CONFIG["encoder_name"])
 
 def main():
     # Test sentences (same as in docstring/example)
-    test_sents = [
+    test_sents = ["promoting ri might reduce risk factors for drug use and enhance the effects of protective factors (brook et al., 1998).;;",
+        "it is also considered that the process could easily be adapted for virtual delivery, thus increasing its accessibility.;;",
+        "(corrected for unreliability; Bryk and Raudenbush 1992).;;",
+        "big data technologies, however, facilitate the collection and sharing of these data on a large scale.;;",
+        "depending on how successful and consistent the analyst was while inventing terms and coupling them with contexts, the resulting network would also become intuitively meaningful to any native speaker (see below).;;",
+        "thus, this would intensify interpersonal stress with their family members and increase the risk of relapse.;;",
+        "for instance, schneider and turkat (1975) reported that low self-esteem individuals were more dependent on the evaluations of others in determining their sense of self-worth.;;",
+        "in many programme areas, this is in fact possible since there are frequently follow-on programmes whose planning stages could deploy a review approach, but of course it is rarely done.;;",
         "Insomnia causes depression and a lack of concentration in children",
         "smoking causes lung cancer and heart disease",
         "exercise improves physical health and mental well-being",
@@ -39,7 +46,7 @@ def main():
         "A significant rise in local unemployment rates is a primary driver of increased property crime in the metropolitan area.",
         "Consistent and responsive caregiving in the first year of life is a crucial factor in the development of a secure attachment style in children.",
         "The prolonged drought led to widespread crop failure, which in turn caused a sharp increase in food prices, ultimately contributing to social unrest in the region."
-    ]
+        ]
 
     # Load model and tokenizer
     # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -47,7 +54,7 @@ def main():
     # tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH)
 
     model=JointCausalModel(**MODEL_CONFIG)
-    model.load_state_dict(torch.load("src\\jointlearning\\expert_bert_GCE_Softmax_Normal\\expert_bert_GCE_Softmax_Normal_model.pt",map_location=DEVICE))
+    model.load_state_dict(torch.load(MODEL_PATH,map_location=DEVICE))
     model.to(DEVICE).eval(); 
 
     # Run prediction (using the same settings as before)

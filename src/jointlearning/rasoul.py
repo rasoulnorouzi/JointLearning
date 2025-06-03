@@ -17,7 +17,7 @@ print(f"id2label_bio: {id2label_bio}")
 print(f"id2label_rel: {id2label_rel}")
 
 tokenizer = AutoTokenizer.from_pretrained(MODEL_CONFIG["encoder_name"])
-model_path = r"src\jointlearning\expert_bert_softmax\expert_bert_softmax_model.pt"
+model_path = r"C:\Users\norouzin\Desktop\JointLearning\src\jointlearning\expert_bert_softmax\expert_bert_softmax_model.pt"
 model = JointCausalModel(**MODEL_CONFIG)
 model.load_state_dict(torch.load(model_path, map_location=device))
 model.to(device)
@@ -67,7 +67,7 @@ for i, text_sample in enumerate(test):
             input_ids=tokenized_input["input_ids"],
             attention_mask=tokenized_input["attention_mask"]
         )
-    print(result)
+    # print(result)
 
     # %%
     cls_prediction = torch.argmax(result["cls_logits"], dim=-1)

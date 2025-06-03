@@ -173,7 +173,7 @@ def _model():
     global _model_cache
     if _model_cache is None:
         m=JointCausalModel(**MODEL_CONFIG)
-        m.load_state_dict(torch.load("src\\jointlearning\\expert_bert_GCE_Softmax_Normal\\expert_bert_GCE_Softmax_Normal_model.pt",map_location=DEVICE))
+        m.load_state_dict(torch.load(r"C:\Users\norouzin\Desktop\JointLearning\src\jointlearning\expert_bert_softmax\expert_bert_softmax_model.pt",map_location=DEVICE))
         m.to(DEVICE).eval(); _model_cache=m
     return _model_cache
 # ———————————————————————————————————————————————————————————
