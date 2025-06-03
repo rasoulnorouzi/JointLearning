@@ -235,3 +235,198 @@ class JointCausalModel(nn.Module, PyTorchModelHubMixin):
             "tag_loss": tag_loss, 
             "rel_logits": rel_logits, 
         }
+
+    def predict(self, sents: List[str], tokenizer=None, rel_mode="auto", rel_threshold=0.4, cause_decision="cls+span") -> list:
+        """
+        HuggingFace-compatible prediction method for causal extraction.
+        Args:
+            sents (List[str]): List of input sentences.
+            tokenizer: Optional HuggingFace tokenizer. If None, uses self.encoder_name.
+            rel_mode (str): 'auto' or 'head'.
+            rel_threshold (float): Probability threshold for relation extraction.
+            cause_decision (str): 'cls_only', 'span_only', or 'cls+span'.
+        Returns:
+            List of dicts with 'text', 'causal', and 'relations' fields for each sentence.
+        """
+        # Use id2label_bio from the module-level import instead of importing here
+        if tokenizer is None:
+            from transformers import AutoTokenizer
+            tokenizer = AutoTokenizer.from_pretrained(self.encoder_name)
+        device = next(self.parameters()).device
+        outs = []
+        for txt in sents:
+            enc = tokenizer([txt], return_tensors="pt", truncation=True, max_length=512)
+            enc = {k: v.to(device) for k, v in enc.items()}
+            with torch.no_grad():
+                rel_args = {}
+                rel_pair_spans = []
+                # Always prepare relation extraction arguments if needed (for head mode or auto mode with multi C/E)
+                if rel_mode == "head":
+                    res_tmp = self(input_ids=enc["input_ids"], attention_mask=enc["attention_mask"])
+                    bio_tmp = res_tmp["bio_emissions"].squeeze(0).argmax(-1).tolist()
+                    tok_tmp = tokenizer.convert_ids_to_tokens(enc["input_ids"].squeeze(0))
+                    lab_tmp = [id2label_bio[i] for i in bio_tmp]
+                    fixed_tmp = self._apply_bio_rules(tok_tmp, lab_tmp)
+                    spans_tmp = self._merge_spans(tok_tmp, fixed_tmp)
+                    c_spans = [s for s in spans_tmp if s.role in ("C", "CE")]
+                    e_spans = [s for s in spans_tmp if s.role in ("E", "CE")]
+                    pair_batch = []
+                    cause_starts = []
+                    cause_ends = []
+                    effect_starts = []
+                    effect_ends = []
+                    for c in c_spans:
+                        for e in e_spans:
+                            if c.start_tok == e.start_tok and c.end_tok == e.end_tok:
+                                continue
+                            pair_batch.append(0)
+                            cause_starts.append(c.start_tok)
+                            cause_ends.append(c.end_tok)
+                            effect_starts.append(e.start_tok)
+                            effect_ends.append(e.end_tok)
+                            rel_pair_spans.append((c, e))
+                    if pair_batch:
+                        rel_args = {
+                            "pair_batch": torch.tensor(pair_batch, device=device),
+                            "cause_starts": torch.tensor(cause_starts, device=device),
+                            "cause_ends": torch.tensor(cause_ends, device=device),
+                            "effect_starts": torch.tensor(effect_starts, device=device),
+                            "effect_ends": torch.tensor(effect_ends, device=device),
+                        }
+                res = self(input_ids=enc["input_ids"], attention_mask=enc["attention_mask"], **rel_args)
+            cls = res["cls_logits"].squeeze(0)
+            bio = res["bio_emissions"].squeeze(0).argmax(-1).tolist()
+            tok = tokenizer.convert_ids_to_tokens(enc["input_ids"].squeeze(0))
+            lab = [id2label_bio[i] for i in bio]
+            fixed = self._apply_bio_rules(tok, lab)
+            spans = self._merge_spans(tok, fixed)
+            causal = self._decide_causal(cls, spans, cause_decision)
+            if not causal:
+                outs.append({"text": txt, "causal": False, "relations": []})
+                continue
+            rels = []
+            rel_logits = res.get("rel_logits")
+            rel_probs = None
+            if rel_logits is not None:
+                rel_probs = torch.softmax(rel_logits, dim=-1)
+            if rel_mode == "head":
+                for idx, (csp, esp) in enumerate(rel_pair_spans):
+                    if rel_probs[idx, 1].item() > rel_threshold:
+                        rels.append({"cause": csp.text, "effect": esp.text, "type": "Rel_CE"})
+            elif rel_mode == "auto":
+                c_spans = [s for s in spans if s.role in ("C", "CE")]
+                e_spans = [s for s in spans if s.role in ("E", "CE")]
+                if not c_spans or not e_spans:
+                    rels = []
+                elif len(c_spans) == 1 and len(e_spans) >= 1:
+                    for e in e_spans:
+                        rels.append({"cause": c_spans[0].text, "effect": e.text, "type": "Rel_CE"})
+                elif len(e_spans) == 1 and len(c_spans) >= 1:
+                    for c in c_spans:
+                        rels.append({"cause": c.text, "effect": e_spans[0].text, "type": "Rel_CE"})
+                elif len(c_spans) > 1 and len(e_spans) > 1:
+                    pair_batch = []
+                    cause_starts = []
+                    cause_ends = []
+                    effect_starts = []
+                    effect_ends = []
+                    rel_pair_spans = []
+                    for c in c_spans:
+                        for e in e_spans:
+                            if (c.start_tok == e.start_tok and c.end_tok == e.end_tok):
+                                continue
+                            pair_batch.append(0)
+                            cause_starts.append(c.start_tok)
+                            cause_ends.append(c.end_tok)
+                            effect_starts.append(e.start_tok)
+                            effect_ends.append(e.end_tok)
+                            rel_pair_spans.append((c, e))
+                    if pair_batch:
+                        rel_args = {
+                            "pair_batch": torch.tensor(pair_batch, device=device),
+                            "cause_starts": torch.tensor(cause_starts, device=device),
+                            "cause_ends": torch.tensor(cause_ends, device=device),
+                            "effect_starts": torch.tensor(effect_starts, device=device),
+                            "effect_ends": torch.tensor(effect_ends, device=device),
+                        }
+                        res_rel = self(input_ids=enc["input_ids"], attention_mask=enc["attention_mask"], **rel_args)
+                        rel_logits = res_rel.get("rel_logits")
+                        if rel_logits is not None:
+                            rel_probs = torch.softmax(rel_logits, dim=-1)
+                            for idx, (csp, esp) in enumerate(rel_pair_spans):
+                                if rel_probs[idx, 1].item() > rel_threshold:
+                                    rels.append({"cause": csp.text, "effect": esp.text, "type": "Rel_CE"})
+            if cause_decision == "cls_only":
+                causal = cls.argmax(-1).item() == 1
+            elif cause_decision == "span_only":
+                causal = any(x.role == "C" for x in spans) and any(x.role == "E" for x in spans)
+            elif cause_decision == "cls+span":
+                causal = (cls.argmax(-1).item() == 1) and (any(x.role == "C" for x in spans) and any(x.role == "E" for x in spans))
+            else:
+                raise ValueError(cause_decision)
+            if not rels:
+                outs.append({"text": txt, "causal": False, "relations": []})
+            else:
+                outs.append({"text": txt, "causal": causal, "relations": rels})
+        return outs
+
+    @staticmethod
+    def _apply_bio_rules(tok, lab):
+        """
+        Apply post-processing rules to BIO tags to fix inconsistencies and clean up spans.
+        - Fixes mixed-role spans, punctuation, short tokens, and CE disambiguation.
+        """
+        rep, n = lab.copy(), len(tok)
+        def blocks():
+            i=0
+            while i<n:
+                if rep[i]=="O": i+=1; continue
+                s=i
+                while i+1<n and rep[i+1]!="O": i+=1
+                yield s,i; i+=1
+        # B‑1′: Fix mixed-role spans
+        for s,e in list(blocks()):
+            roles=[rep[j].split("-")[-1] for j in range(s,e+1)]
+            if len(set(roles))>1:
+                split=next((j for j in range(s+1,e+1) if roles[j-s]!=roles[j-s-1]),None)
+                if split:
+                    if 1 in {split-s,e-split+1}:
+                        maj=roles[0] if split-s>e-split+1 else roles[-1]
+                        for j in range(s,e+1): rep[j]=f"B-{maj}" if j==s else f"I-{maj}"
+        return rep
+
+    @staticmethod
+    def _merge_spans(tok, lab):
+        class SpanObj:
+            def __init__(self, role, start_tok, end_tok, text):
+                self.role = role
+                self.start_tok = start_tok
+                self.end_tok = end_tok
+                self.text = text
+        spans = []
+        n = len(tok)
+        i = 0
+        while i < n:
+            if lab[i].startswith("B-"):
+                role = lab[i][2:]
+                start = i
+                end = i
+                while end+1 < n and lab[end+1].startswith("I-") and lab[end+1][2:] == role:
+                    end += 1
+                text = " ".join(tok[start:end+1]).replace(" ##","")
+                spans.append(SpanObj(role, start, end, text))
+                i = end + 1
+            else:
+                i += 1
+        return spans
+
+    @staticmethod
+    def _decide_causal(cls, spans, mode):
+        if mode == "cls_only":
+            return cls.argmax(-1).item() == 1
+        elif mode == "span_only":
+            return any(x.role == "C" for x in spans) and any(x.role == "E" for x in spans)
+        elif mode == "cls+span":
+            return (cls.argmax(-1).item() == 1) and (any(x.role == "C" for x in spans) and any(x.role == "E" for x in spans))
+        else:
+            raise ValueError(mode)
