@@ -231,7 +231,13 @@ def run_inference(sents: List[str], *, rel_mode="auto", rel_threshold=0.4, cause
         with torch.no_grad():
             rel_args = {}
             rel_pair_spans = []
-            # Prepare relation extraction arguments in head mode (always, since level=3 is default)
+            # Always prepare relation extraction arguments if needed (for head mode or auto mode with multi C/E)
+            need_rel_head = rel_mode == "head"
+            # For auto mode, we need to check after span extraction if multi C/E exists
+            res_tmp = None
+            spans_tmp = None
+            c_spans = None
+            e_spans = None
             if rel_mode == "head":
                 res_tmp = mdl(input_ids=enc["input_ids"], attention_mask=enc["attention_mask"])
                 bio_tmp = res_tmp["bio_emissions"].squeeze(0).argmax(-1).tolist()
@@ -298,19 +304,40 @@ def run_inference(sents: List[str], *, rel_mode="auto", rel_threshold=0.4, cause
                 for c in c_spans:
                     rels.append({"cause": c.text, "effect": e_spans[0].text, "type": "Rel_CE"})
             elif len(c_spans) > 1 and len(e_spans) > 1:
-                # Use third head if available, else do not output any relations
-                if rel_probs is not None:
-                    # Build all possible pairs
-                    pair_idx = 0
-                    for c in c_spans:
-                        for e in e_spans:
-                            if (c.start_tok == e.start_tok and e.end_tok == c.end_tok):
-                                continue
-                            if rel_probs[pair_idx, 1].item() > rel_threshold:
-                                rels.append({"cause": c.text, "effect": e.text, "type": "Rel_CE"})
-                            pair_idx += 1
-                else:
-                    rels = []
+                # For multi C/E, run the relation head just like in head mode
+                # Prepare rel_args and rel_pair_spans if not already done
+                pair_batch = []
+                cause_starts = []
+                cause_ends = []
+                effect_starts = []
+                effect_ends = []
+                rel_pair_spans = []
+                for c in c_spans:
+                    for e in e_spans:
+                        if (c.start_tok == e.start_tok and e.end_tok == c.end_tok):
+                            continue
+                        pair_batch.append(0)
+                        cause_starts.append(c.start_tok)
+                        cause_ends.append(c.end_tok)
+                        effect_starts.append(e.start_tok)
+                        effect_ends.append(e.end_tok)
+                        rel_pair_spans.append((c, e))
+                if pair_batch:
+                    rel_args = {
+                        "pair_batch": torch.tensor(pair_batch, device=DEVICE),
+                        "cause_starts": torch.tensor(cause_starts, device=DEVICE),
+                        "cause_ends": torch.tensor(cause_ends, device=DEVICE),
+                        "effect_starts": torch.tensor(effect_starts, device=DEVICE),
+                        "effect_ends": torch.tensor(effect_ends, device=DEVICE),
+                    }
+                    # Run the model again to get rel_logits for these pairs
+                    res_rel = mdl(input_ids=enc["input_ids"], attention_mask=enc["attention_mask"], **rel_args)
+                    rel_logits = res_rel.get("rel_logits")
+                    if rel_logits is not None:
+                        rel_probs = torch.softmax(rel_logits, dim=-1)
+                        for idx, (csp, esp) in enumerate(rel_pair_spans):
+                            if rel_probs[idx, 1].item() > rel_threshold:
+                                rels.append({"cause": csp.text, "effect": esp.text, "type": "Rel_CE"})
         # If no relations found, set causal to False
         if cause_decision == "cls_only":
             causal = cls.argmax(-1).item() == 1
@@ -351,7 +378,8 @@ if __name__ == "__main__":
         "the perceived consequences of turning to others for social support, therefore, may influence the expression of pain.;;",
         "moreover, in the context of cooperation in organizational and legal settings, de cremer and tyler (2007) showed that if a party communicates intentions to listen to others and take their interests at heart, cooperative decision making is only promoted if this other is seen as honest and trustworthy.;;",
         "A significant rise in local unemployment rates is a primary driver of increased property crime in the metropolitan area.",
-        "Consistent and responsive caregiving in the first year of life is a crucial factor in the development of a secure attachment style in children."
+        "Consistent and responsive caregiving in the first year of life is a crucial factor in the development of a secure attachment style in children.",
+        "The prolonged drought led to widespread crop failure, which in turn caused a sharp increase in food prices, ultimately contributing to social unrest in the region."
         ]
     res = run_inference(test, rel_mode="auto", rel_threshold=0.5, cause_decision="cls+span")
     print(json.dumps(res, indent=2, ensure_ascii=False))

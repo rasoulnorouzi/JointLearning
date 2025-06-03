@@ -45,7 +45,8 @@ test = ["promoting ri might reduce risk factors for drug use and enhance the eff
         "the perceived consequences of turning to others for social support, therefore, may influence the expression of pain.;;",
         "moreover, in the context of cooperation in organizational and legal settings, de cremer and tyler (2007) showed that if a party communicates intentions to listen to others and take their interests at heart, cooperative decision making is only promoted if this other is seen as honest and trustworthy.;;",
         "A significant rise in local unemployment rates is a primary driver of increased property crime in the metropolitan area.",
-        "Consistent and responsive caregiving in the first year of life is a crucial factor in the development of a secure attachment style in children."
+        "Consistent and responsive caregiving in the first year of life is a crucial factor in the development of a secure attachment style in children.",
+        "The prolonged drought led to widespread crop failure, which in turn caused a sharp increase in food prices, ultimately contributing to social unrest in the region."
         ]
 
 for i, text_sample in enumerate(test):
