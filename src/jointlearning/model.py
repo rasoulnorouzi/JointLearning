@@ -261,6 +261,7 @@ class JointCausalModel(nn.Module, PyTorchModelHubMixin):
             List of dicts with 'text', 'causal', and 'relations' fields for each sentence.
         """
         # Use id2label_bio from the module-level import instead of importing here
+        # Only load tokenizer if not provided
         if tokenizer is None:
             from transformers import AutoTokenizer
             tokenizer = AutoTokenizer.from_pretrained(self.encoder_name)
@@ -441,6 +442,7 @@ class JointCausalModel(nn.Module, PyTorchModelHubMixin):
     def _merge_spans(tok, lab):
         """
         Merge contiguous labeled tokens into Span objects, gluing across connectors.
+        FIX: Start a new span for every B- tag, even if previous span is same type.
         """
         from transformers import AutoTokenizer
         try:
@@ -455,19 +457,9 @@ class JointCausalModel(nn.Module, PyTorchModelHubMixin):
         while i<len(tok):
             if lab[i]=="O": i+=1; continue
             role=lab[i].split("-")[-1]; s=i
-            # Find the end of the span, but split at conjunctions like 'and'/'or'
-            e = i
-            while e+1<len(tok) and lab[e+1]!="O" and tok[e+1].lower() not in _SPLIT_CONJ:
-                e+=1
-            # Trim leading/trailing stopwords from the span
-            s_trim, e_trim = s, e
-            while s_trim <= e_trim and tok[s_trim].lower() in _STOPWORD_TRIM:
-                s_trim += 1
-            while e_trim >= s_trim and tok[e_trim].lower() in _STOPWORD_TRIM:
-                e_trim -= 1
-            if s_trim <= e_trim:
-                spans.append(Span(role,s_trim,e_trim,tokenizer.convert_tokens_to_string(tok[s_trim:e_trim+1])))
-            i = e+1
+            while i+1<len(tok) and lab[i+1]!="O": i+=1
+            spans.append(Span(role,s,i,tokenizer.convert_tokens_to_string(tok[s:i+1])))
+            i+=1
         merged=[spans[0]] if spans else []
         for sp in spans[1:]:
             prv=merged[-1]
