@@ -9,3 +9,4 @@ src/jointlearning/expert_bert_GCE_weakSP/
 src/jointlearning/expert_bert_GCE/
 src/jointlearning/expert_bert_GCE_Softmax_Normal/
 src/jointlearning/expert_bert_GCE_Softmax_Freeze/
+__pycache__/
