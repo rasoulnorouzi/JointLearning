@@ -443,6 +443,7 @@ class JointCausalModel(nn.Module, PyTorchModelHubMixin):
         """
         Merge contiguous labeled tokens into Span objects, gluing across connectors.
         FIX: Start a new span for every B- tag, even if previous span is same type.
+        Also trims leading/trailing connectors (e.g., 'and', 'or', 'but') from each span.
         """
         from transformers import AutoTokenizer
         try:
@@ -450,23 +451,40 @@ class JointCausalModel(nn.Module, PyTorchModelHubMixin):
         except ImportError:
             from config import MODEL_CONFIG
         tokenizer = AutoTokenizer.from_pretrained(MODEL_CONFIG["encoder_name"])
-        _CONNECTORS = {"of","to","with","for","the"}
-        _SPLIT_CONJ = {"and", "or"}
-        _STOPWORD_TRIM = {"and", "or", "the", "a", "an", "but", "so", "yet", "nor", "for", "to", "with", "of"}
+        _CONNECTORS = {"of","to","with","for","the","and","or","but"}
         spans=[]; i=0
         while i<len(tok):
             if lab[i]=="O": i+=1; continue
-            role=lab[i].split("-")[-1]; s=i
-            while i+1<len(tok) and lab[i+1]!="O": i+=1
-            spans.append(Span(role,s,i,tokenizer.convert_tokens_to_string(tok[s:i+1])))
-            i+=1
+            tag = lab[i]
+            if tag.startswith("B-"):
+                role=tag.split("-")[-1]; s=i; e=i
+                # collect I- of same type
+                while e+1<len(tok) and lab[e+1]==f"I-{role}":
+                    e+=1
+                spans.append(Span(role,s,e,tokenizer.convert_tokens_to_string(tok[s:e+1])))
+                i=e+1
+            else:
+                i+=1
         merged=[spans[0]] if spans else []
         for sp in spans[1:]:
             prv=merged[-1]
             if sp.role==prv.role and sp.start_tok==prv.end_tok+2 and tok[prv.end_tok+1].lower() in _CONNECTORS:
                 merged[-1]=Span(prv.role,prv.start_tok,sp.end_tok,tokenizer.convert_tokens_to_string(tok[prv.start_tok:sp.end_tok+1]),prv.is_virtual)
             else: merged.append(sp)
-        return merged
+        # Trim leading/trailing connectors from each span
+        trimmed = []
+        for sp in merged:
+            s, e = sp.start_tok, sp.end_tok
+            # Trim from start
+            while s <= e and tok[s].lower() in _CONNECTORS:
+                s += 1
+            # Trim from end
+            while e >= s and tok[e].lower() in _CONNECTORS:
+                e -= 1
+            if s > e:
+                continue  # skip empty span
+            trimmed.append(Span(sp.role, s, e, tokenizer.convert_tokens_to_string(tok[s:e+1]), sp.is_virtual))
+        return trimmed
 
     @staticmethod
     def _decide_causal(cls, spans, mode):
