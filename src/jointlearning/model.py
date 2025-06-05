@@ -448,21 +448,59 @@ class JointCausalModel(nn.Module, PyTorchModelHubMixin):
         except ImportError:
             from config import MODEL_CONFIG
         tokenizer = AutoTokenizer.from_pretrained(MODEL_CONFIG["encoder_name"])
-        _CONNECTORS = {"of","to","with","for","the"}
-        spans=[]; i=0
-        while i<len(tok):
-            if lab[i]=="O": i+=1; continue
-            role=lab[i].split("-")[-1]; s=i
-            while i+1<len(tok) and lab[i+1]!="O": i+=1
-            spans.append(Span(role,s,i,tokenizer.convert_tokens_to_string(tok[s:i+1])))
-            i+=1
-        merged=[spans[0]] if spans else []
+        _CONNECTORS = {"of", "to", "with", "for", "the", "and"}
+        _STOPWORDS = {"this", "that", "these", "those", "it", "they"}
+        spans = []
+        i = 0
+        while i < len(tok):
+            if lab[i] == "O":
+                i += 1
+                continue
+            role = lab[i].split("-")[-1]
+            s = i
+            while i + 1 < len(tok) and lab[i + 1] != "O":
+                i += 1
+            spans.append(Span(role, s, i, tokenizer.convert_tokens_to_string(tok[s:i + 1])))
+            i += 1
+
+        merged = [spans[0]] if spans else []
         for sp in spans[1:]:
-            prv=merged[-1]
-            if sp.role==prv.role and sp.start_tok==prv.end_tok+2 and tok[prv.end_tok+1].lower() in _CONNECTORS:
-                merged[-1]=Span(prv.role,prv.start_tok,sp.end_tok,tokenizer.convert_tokens_to_string(tok[prv.start_tok:sp.end_tok+1]),prv.is_virtual)
-            else: merged.append(sp)
-        return merged
+            prv = merged[-1]
+            if sp.role == prv.role and sp.start_tok == prv.end_tok + 2 and tok[prv.end_tok + 1].lower() in _CONNECTORS:
+                # Check if the current span starts with a B tag and a connector is present
+                if lab[sp.start_tok].startswith("B") and tok[prv.end_tok + 1].lower() == "and":
+                    merged.append(sp)
+                else:
+                    merged[-1] = Span(
+                        prv.role,
+                        prv.start_tok,
+                        sp.end_tok,
+                        tokenizer.convert_tokens_to_string(tok[prv.start_tok:sp.end_tok + 1]),
+                        prv.is_virtual
+                    )
+            else:
+                merged.append(sp)
+
+        # Ensure spans are split when a new span starts with a B tag and a connector is present
+        final_spans = []
+        for span in merged:
+            tokens = tokenizer.tokenize(span.text)
+            if "and" in tokens:
+                split_idx = tokens.index("and")
+                first_part = tokenizer.convert_tokens_to_string(tokens[:split_idx])
+                second_part = tokenizer.convert_tokens_to_string(tokens[split_idx + 1:])
+                final_spans.append(Span(span.role, span.start_tok, span.start_tok + len(first_part.split()), first_part))
+                final_spans.append(Span(span.role, span.start_tok + len(first_part.split()) + 1, span.end_tok, second_part))
+            else:
+                # Trim stopwords from the start and end of the span only if the span length is greater than 1
+                if len(tokens) > 1:
+                    trimmed_tokens = [t for t in tokens if t.lower() not in _STOPWORDS]
+                else:
+                    trimmed_tokens = tokens
+                trimmed_text = tokenizer.convert_tokens_to_string(trimmed_tokens)
+                final_spans.append(Span(span.role, span.start_tok, span.end_tok, trimmed_text))
+
+        return final_spans
 
     @staticmethod
     def _decide_causal(cls, spans, mode):
