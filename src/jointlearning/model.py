@@ -261,6 +261,7 @@ class JointCausalModel(nn.Module, PyTorchModelHubMixin):
             List of dicts with 'text', 'causal', and 'relations' fields for each sentence.
         """
         # Use id2label_bio from the module-level import instead of importing here
+        # Only load tokenizer if not provided
         if tokenizer is None:
             from transformers import AutoTokenizer
             tokenizer = AutoTokenizer.from_pretrained(self.encoder_name)
