@@ -441,6 +441,7 @@ class JointCausalModel(nn.Module, PyTorchModelHubMixin):
     def _merge_spans(tok, lab):
         """
         Merge contiguous labeled tokens into Span objects, gluing across connectors.
+        FIX: Start a new span for every B- tag, even if previous span is same type.
         """
         from transformers import AutoTokenizer
         try:
@@ -452,10 +453,16 @@ class JointCausalModel(nn.Module, PyTorchModelHubMixin):
         spans=[]; i=0
         while i<len(tok):
             if lab[i]=="O": i+=1; continue
-            role=lab[i].split("-")[-1]; s=i
-            while i+1<len(tok) and lab[i+1]!="O": i+=1
-            spans.append(Span(role,s,i,tokenizer.convert_tokens_to_string(tok[s:i+1])))
-            i+=1
+            tag = lab[i]
+            if tag.startswith("B-"):
+                role=tag.split("-")[-1]; s=i; e=i
+                # collect I- of same type
+                while e+1<len(tok) and lab[e+1]==f"I-{role}":
+                    e+=1
+                spans.append(Span(role,s,e,tokenizer.convert_tokens_to_string(tok[s:e+1])))
+                i=e+1
+            else:
+                i+=1
         merged=[spans[0]] if spans else []
         for sp in spans[1:]:
             prv=merged[-1]
