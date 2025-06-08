@@ -1,15 +1,18 @@
 from __future__ import annotations
-from typing import Dict, Tuple, Optional, Any, List
+from typing import Dict, List, Optional
 import torch
 import torch.nn as nn
-from transformers import AutoModel
-from huggingface_hub import PyTorchModelHubMixin
+from transformers import AutoModel, PreTrainedModel
 from dataclasses import dataclass
+try:
+    from .config import id2label_bio, id2label_rel, id2label_cls
+except ImportError:
+    from config import id2label_bio, id2label_rel, id2label_cls
 
 try:
-    from .config import MODEL_CONFIG, id2label_bio, id2label_rel, id2label_cls
+    from .configuration_joint_causal import JointCausalConfig
 except ImportError:
-    from config import MODEL_CONFIG, id2label_bio, id2label_rel, id2label_cls
+    from configuration_joint_causal import JointCausalConfig
 
 # ---------------------------------------------------------------------------
 # Type aliases & label maps
@@ -29,18 +32,6 @@ The model supports class weights for handling imbalanced data.
 
 ```python
 >>> model = JointCausalModel()        # softmax-based model
-```
-
----------------------------------------------------------------------------
-Usage overview
----------------------------------------------------------------------------
-
-**Training**
-~~~~~~~~~~~~
-(Training code example omitted for brevity, see previous versions)
----------------------------------------------------------------------------
-Implementation
----------------------------------------------------------------------------
 """
 
 
@@ -59,7 +50,9 @@ class Span:
 # ---------------------------------------------------------------------------
 # Main module
 # ---------------------------------------------------------------------------
-class JointCausalModel(nn.Module, PyTorchModelHubMixin):
+
+class JointCausalModel(PreTrainedModel):
+
     """Encoder + three heads with **optional CRF** BIO decoder.
 
     This model integrates a pre-trained transformer encoder with three distinct
@@ -70,19 +63,14 @@ class JointCausalModel(nn.Module, PyTorchModelHubMixin):
     3. Relation extraction (rel_head): Identifies relations between entities
        detected by the BIO tagging head.
     """
-
+    # Link the model to its config class, as shown in the tutorial.
+    config_class = JointCausalConfig
+  
     # ------------------------------------------------------------------
     # constructor
-    # ------------------------------------------------------------------
-    def __init__(
-        self,
-        *,
-        encoder_name: str = MODEL_CONFIG["encoder_name"],
-        num_cls_labels: int = MODEL_CONFIG["num_cls_labels"],
-        num_bio_labels: int = MODEL_CONFIG["num_bio_labels"],
-        num_rel_labels: int = MODEL_CONFIG["num_rel_labels"],
-        dropout: float = MODEL_CONFIG["dropout"],
-    ) -> None:
+    # -----------------------------------------------------------
+    def __init__(self, config: JointCausalConfig):
+
         """Initializes the JointCausalModel.
 
         Args:
@@ -93,40 +81,40 @@ class JointCausalModel(nn.Module, PyTorchModelHubMixin):
             num_rel_labels: Number of labels for the relation extraction task.
             dropout: Dropout rate for regularization.
         """
-        super().__init__()
 
-        self.encoder_name = encoder_name
-        self.num_cls_labels = num_cls_labels
-        self.num_bio_labels = num_bio_labels
-        self.num_rel_labels = num_rel_labels
-        self.dropout_rate = dropout
-        self.enc = AutoModel.from_pretrained(encoder_name)
+        super().__init__(config)
+        self.config = config
+
+        self.enc = AutoModel.from_pretrained(config.encoder_name)
         self.hidden_size = self.enc.config.hidden_size
-        self.dropout = nn.Dropout(dropout)
+        self.dropout = nn.Dropout(config.dropout)
         self.layer_norm = nn.LayerNorm(self.hidden_size)
+        
+   
+
         self.cls_head = nn.Sequential(
             nn.Linear(self.hidden_size, self.hidden_size // 2),
             nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(self.hidden_size // 2, num_cls_labels),
+            nn.Dropout(config.dropout),
+            nn.Linear(self.hidden_size // 2, config.num_cls_labels),
         )
         self.bio_head = nn.Sequential(
             nn.Linear(self.hidden_size, self.hidden_size),
             nn.ReLU(),
-            nn.Dropout(dropout),
+            nn.Dropout(config.dropout),
             nn.Linear(self.hidden_size, self.hidden_size // 2),
             nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(self.hidden_size // 2, num_bio_labels),
+            nn.Dropout(config.dropout),
+            nn.Linear(self.hidden_size // 2, config.num_bio_labels),
         )
         self.rel_head = nn.Sequential(
-            nn.Linear(self.hidden_size * 2, self.hidden_size), 
+            nn.Linear(self.hidden_size * 2, self.hidden_size),
             nn.ReLU(),
-            nn.Dropout(dropout),
+            nn.Dropout(config.dropout),
             nn.Linear(self.hidden_size, self.hidden_size // 2),
             nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(self.hidden_size // 2, num_rel_labels),
+            nn.Dropout(config.dropout),
+            nn.Linear(self.hidden_size // 2, config.num_rel_labels),
         )
         self._init_new_layer_weights()
 
@@ -261,7 +249,6 @@ class JointCausalModel(nn.Module, PyTorchModelHubMixin):
             List of dicts with 'text', 'causal', and 'relations' fields for each sentence.
         """
         # Use id2label_bio from the module-level import instead of importing here
-        # Only load tokenizer if not provided
         if tokenizer is None:
             from transformers import AutoTokenizer
             tokenizer = AutoTokenizer.from_pretrained(self.encoder_name)
@@ -442,8 +429,6 @@ class JointCausalModel(nn.Module, PyTorchModelHubMixin):
     def _merge_spans(tok, lab):
         """
         Merge contiguous labeled tokens into Span objects, gluing across connectors.
-        FIX: Start a new span for every B- tag, even if previous span is same type.
-        Also trims leading/trailing connectors (e.g., 'and', 'or', 'but') from each span.
         """
         from transformers import AutoTokenizer
         try:
@@ -451,8 +436,7 @@ class JointCausalModel(nn.Module, PyTorchModelHubMixin):
         except ImportError:
             from config import MODEL_CONFIG
         tokenizer = AutoTokenizer.from_pretrained(MODEL_CONFIG["encoder_name"])
-        # --- MERGE CONFLICT RESOLVED: prefer new-branch logic, but keep _CONNECTORS and _STOPWORDS from both sides ---
-        _CONNECTORS = {"of", "to", "with", "for", "the", "and", "or", "but"}
+        _CONNECTORS = {"of", "to", "with", "for", "the", "and"}
         _STOPWORDS = {"this", "that", "these", "those", "it", "they"}
         spans = []
         i = 0
@@ -516,3 +500,4 @@ class JointCausalModel(nn.Module, PyTorchModelHubMixin):
             return (cls.argmax(-1).item() == 1) and (any(x.role == "C" for x in spans) and any(x.role == "E" for x in spans))
         else:
             raise ValueError(mode)
+
