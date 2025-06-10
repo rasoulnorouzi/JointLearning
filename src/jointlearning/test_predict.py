@@ -6,7 +6,6 @@ Mirrors the previous usage of prediction.py, using the same test sentences and s
 import json
 import torch
 from transformers import AutoTokenizer
-from model import JointCausalModel
 try:
     from .config import MODEL_CONFIG, id2label_bio, id2label_cls
     from .model import JointCausalModel
@@ -46,7 +45,8 @@ def main():
         "A significant rise in local unemployment rates is a primary driver of increased property crime in the metropolitan area.",
         "Consistent and responsive caregiving in the first year of life is a crucial factor in the development of a secure attachment style in children.",
         "The prolonged drought led to widespread crop failure, which in turn caused a sharp increase in food prices, ultimately contributing to social unrest in the region.",
-        "social exclusion increases aggression and selfdefeating behavior while reducing intelligent thought and prosocial behavior.;;"
+        "social exclusion increases aggression and selfdefeating behavior while reducing intelligent thought and prosocial behavior.;;",
+        "with careful attention to subjects' choices, we found that some factors representing personal traits make altruistic behavior recognizably different.;;"
         ]
 
     # Load model and tokenizer
