@@ -18,7 +18,7 @@ api.upload_folder(
     folder_path=LOCAL_FOLDER,
     repo_id=REPO_ID,
     repo_type="model",
-    commit_message="Uploading joint causal model files into the Hugging Face Hub",
+    commit_message="adding a new post-processing model",
 )
 
 print("\nUpload complete!")

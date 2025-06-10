@@ -236,268 +236,287 @@ class JointCausalModel(PreTrainedModel):
             "rel_logits": rel_logits, 
         }
 
-    def predict(self, sents: List[str], tokenizer=None, rel_mode="auto", rel_threshold=0.4, cause_decision="cls+span") -> list:
+    # ---------------------------------------------------------------------------
+    # Refactored prediction & post‑processing utilities for JointCausalModel
+    # ---------------------------------------------------------------------------
+
+    def predict(
+        self,
+        sents: List[str],
+        tokenizer=None,
+        *,
+        rel_mode: str = "auto",
+        rel_threshold: float = 0.55,
+        cause_decision: str = "cls+span",
+    ) -> List[dict]:
+        """End‑to‑end inference for causal sentence extraction.
+
+        *   **Sub‑token stitching** – word‑pieces are merged so we never output
+            truncated forms like "ins" or "##pse".
+        *   **Connector bridging** – spans may jump over a single function word
+            (``of``, ``to`` …) when that yields a cleaner phrase.
+        *   **Self‑loops removed** – we never return relations where *cause == effect*.
+        *   **Probability threshold raised** to 0.55 for relation head to
+            reduce spurious pairs.
         """
-        HuggingFace-compatible prediction method for causal extraction.
-        Args:
-            sents (List[str]): List of input sentences.
-            tokenizer: Optional HuggingFace tokenizer. If None, uses self.encoder_name.
-            rel_mode (str): 'auto' or 'head'.
-            rel_threshold (float): Probability threshold for relation extraction.
-            cause_decision (str): 'cls_only', 'span_only', or 'cls+span'.
-        Returns:
-            List of dicts with 'text', 'causal', and 'relations' fields for each sentence.
-        """
-        # Use id2label_bio from the module-level import instead of importing here
+        # ------------------------------------------------------------------
+        # 0. Tokeniser & device
+        # ------------------------------------------------------------------
         if tokenizer is None:
             from transformers import AutoTokenizer
-            tokenizer = AutoTokenizer.from_pretrained(self.encoder_name)
+            tokenizer = AutoTokenizer.from_pretrained(self.encoder_name, use_fast=True)
+
         device = next(self.parameters()).device
-        outs = []
-        for txt in sents:
-            enc = tokenizer([txt], return_tensors="pt", truncation=True, max_length=512)
-            enc = {k: v.to(device) for k, v in enc.items()}
+        to_dev = lambda d: {k: v.to(device) for k, v in d.items()}
+
+        outputs: List[dict] = []
+
+        # ------------------------------------------------------------------
+        # 1. Iterate through sentences
+        # ------------------------------------------------------------------
+        for sent in sents:
+            enc = tokenizer(sent, return_tensors="pt", truncation=True, max_length=512)
+            enc = to_dev(enc)
+
             with torch.no_grad():
-                rel_args = {}
-                rel_pair_spans = []
-                # Always prepare relation extraction arguments if needed (for head mode or auto mode with multi C/E)
-                if rel_mode == "head":
-                    res_tmp = self(input_ids=enc["input_ids"], attention_mask=enc["attention_mask"])
-                    bio_tmp = res_tmp["bio_emissions"].squeeze(0).argmax(-1).tolist()
-                    tok_tmp = tokenizer.convert_ids_to_tokens(enc["input_ids"].squeeze(0))
-                    lab_tmp = [id2label_bio[i] for i in bio_tmp]
-                    fixed_tmp = JointCausalModel._apply_bio_rules(tok_tmp, lab_tmp)
-                    spans_tmp = JointCausalModel._merge_spans(tok_tmp, fixed_tmp)
-                    c_spans = [s for s in spans_tmp if s.role in ("C", "CE")]
-                    e_spans = [s for s in spans_tmp if s.role in ("E", "CE")]
-                    pair_batch = []
-                    cause_starts = []
-                    cause_ends = []
-                    effect_starts = []
-                    effect_ends = []
-                    for c in c_spans:
-                        for e in e_spans:
-                            if c.start_tok == e.start_tok and c.end_tok == e.end_tok:
-                                continue
-                            pair_batch.append(0)
-                            cause_starts.append(c.start_tok)
-                            cause_ends.append(c.end_tok)
-                            effect_starts.append(e.start_tok)
-                            effect_ends.append(e.end_tok)
-                            rel_pair_spans.append((c, e))
-                    if pair_batch:
-                        rel_args = {
-                            "pair_batch": torch.tensor(pair_batch, device=device),
-                            "cause_starts": torch.tensor(cause_starts, device=device),
-                            "cause_ends": torch.tensor(cause_ends, device=device),
-                            "effect_starts": torch.tensor(effect_starts, device=device),
-                            "effect_ends": torch.tensor(effect_ends, device=device),
-                        }
-                res = self(input_ids=enc["input_ids"], attention_mask=enc["attention_mask"], **rel_args)
-            cls = res["cls_logits"].squeeze(0)
-            bio = res["bio_emissions"].squeeze(0).argmax(-1).tolist()
-            tok = tokenizer.convert_ids_to_tokens(enc["input_ids"].squeeze(0))
-            lab = [id2label_bio[i] for i in bio]
-            fixed = JointCausalModel._apply_bio_rules(tok, lab)
-            spans = JointCausalModel._merge_spans(tok, fixed)
-            causal = JointCausalModel._decide_causal(cls, spans, cause_decision)
-            if not causal:
-                outs.append({"text": txt, "causal": False, "relations": []})
-                continue
-            rels = []
-            rel_logits = res.get("rel_logits")
-            rel_probs = None
-            if rel_logits is not None:
-                rel_probs = torch.softmax(rel_logits, dim=-1)
-            if rel_mode == "head":
-                for idx, (csp, esp) in enumerate(rel_pair_spans):
-                    if rel_probs[idx, 1].item() > rel_threshold:
-                        rels.append({"cause": csp.text, "effect": esp.text, "type": "Rel_CE"})
-            elif rel_mode == "auto":
-                c_spans = [s for s in spans if s.role in ("C", "CE")]
-                e_spans = [s for s in spans if s.role in ("E", "CE")]
-                if not c_spans or not e_spans:
-                    rels = []
-                elif len(c_spans) == 1 and len(e_spans) >= 1:
-                    for e in e_spans:
-                        rels.append({"cause": c_spans[0].text, "effect": e.text, "type": "Rel_CE"})
-                elif len(e_spans) == 1 and len(c_spans) >= 1:
-                    for c in c_spans:
-                        rels.append({"cause": c.text, "effect": e_spans[0].text, "type": "Rel_CE"})
-                elif len(c_spans) > 1 and len(e_spans) > 1:
-                    pair_batch = []
-                    cause_starts = []
-                    cause_ends = []
-                    effect_starts = []
-                    effect_ends = []
-                    rel_pair_spans = []
-                    for c in c_spans:
-                        for e in e_spans:
-                            if (c.start_tok == e.start_tok and c.end_tok == e.end_tok):
-                                continue
-                            pair_batch.append(0)
-                            cause_starts.append(c.start_tok)
-                            cause_ends.append(c.end_tok)
-                            effect_starts.append(e.start_tok)
-                            effect_ends.append(e.end_tok)
-                            rel_pair_spans.append((c, e))
-                    if pair_batch:
-                        rel_args = {
-                            "pair_batch": torch.tensor(pair_batch, device=device),
-                            "cause_starts": torch.tensor(cause_starts, device=device),
-                            "cause_ends": torch.tensor(cause_ends, device=device),
-                            "effect_starts": torch.tensor(effect_starts, device=device),
-                            "effect_ends": torch.tensor(effect_ends, device=device),
-                        }
-                        res_rel = self(input_ids=enc["input_ids"], attention_mask=enc["attention_mask"], **rel_args)
-                        rel_logits = res_rel.get("rel_logits")
-                        if rel_logits is not None:
-                            rel_probs = torch.softmax(rel_logits, dim=-1)
-                            for idx, (csp, esp) in enumerate(rel_pair_spans):
-                                if rel_probs[idx, 1].item() > rel_threshold:
-                                    rels.append({"cause": csp.text, "effect": esp.text, "type": "Rel_CE"})
-            if cause_decision == "cls_only":
-                causal = cls.argmax(-1).item() == 1
-            elif cause_decision == "span_only":
-                causal = any(x.role == "C" for x in spans) and any(x.role == "E" for x in spans)
-            elif cause_decision == "cls+span":
-                causal = (cls.argmax(-1).item() == 1) and (any(x.role == "C" for x in spans) and any(x.role == "E" for x in spans))
-            else:
-                raise ValueError(cause_decision)
-            if not rels:
-                outs.append({"text": txt, "causal": False, "relations": []})
-            else:
-                outs.append({"text": txt, "causal": causal, "relations": rels})
-        return outs
+                base = self(input_ids=enc["input_ids"], attention_mask=enc["attention_mask"])
 
-    @staticmethod
-    def _apply_bio_rules(tok, lab):
-        """
-        Apply post-processing rules to BIO tags to fix inconsistencies and clean up spans.
-        - Fixes mixed-role spans, punctuation, short tokens, and CE disambiguation.
-        """
-        # Constants for punctuation, stopwords, and connectors
-        _PUNCT = {".",",",";",":","?","!","(",")","[","]","{","}"}
-        _STOPWORD_KEEP = {"this","that","these","those","it","they"}
-        
-        rep, n = lab.copy(), len(tok)
-        def blocks():
-            i=0
-            while i<n:
-                if rep[i]=="O": i+=1; continue
-                s=i
-                while i+1<n and rep[i+1]!="O": i+=1
-                yield s,i; i+=1
-        # B‑1′: Fix mixed-role spans
-        for s,e in list(blocks()):
-            roles=[rep[j].split("-")[-1] for j in range(s,e+1)]
-            if len(set(roles))>1:
-                split=next((j for j in range(s+1,e+1) if roles[j-s]!=roles[j-s-1]),None)
-                if split:
-                    if 1 in {split-s,e-split+1}:
-                        maj=roles[0] if split-s>e-split+1 else roles[-1]
-                        for j in range(s,e+1): rep[j]=f"B-{maj}" if j==s else f"I-{maj}"
-        # B‑2: Remove labels from punctuation
-        for i,t in enumerate(tok):
-            if rep[i]!="O" and t in _PUNCT: rep[i]="O"
-        # helper: extract labeled blocks
-        def labeled(v):
-            i=0; out=[]
-            while i<n:
-                if v[i]=="O": i+=1; continue
-                s=i; role=v[i].split("-")[-1]
-                while i+1<n and v[i+1]!="O": i+=1
-                out.append((s,i,role)); i+=1
-            return out
-        bl=labeled(rep)
-        # B‑4: Disambiguate CE to C or E if only one present
-        if any(r=="CE" for *_,r in bl):
-            cntc=sum(1 for *_,r in bl if r=="C"); cnte=sum(1 for *_,r in bl if r=="E")
-            if cntc==0 or cnte==0:
-                tr="C" if cntc==0 else "E"
-                for s,e,r in bl:
-                    if r=="CE":
-                        for idx in range(s,e+1): rep[idx]=f"B-{tr}" if idx==s else f"I-{tr}"
-                bl=labeled(rep)
-        # B‑5/6: Remove labels from short/stopword tokens and trailing punctuation
-        for s,e,_ in bl:
-            if tok[e] in _PUNCT: rep[e]="O"
-            if e==s and len(tok[s])<=2 and tok[s].lower() not in _STOPWORD_KEEP: rep[s]="O"
-        return rep
+            cls_logits = base["cls_logits"].squeeze(0)                    # (2,)
+            bio_ids    = base["bio_emissions"].squeeze(0).argmax(-1).tolist()
+            tokens     = tokenizer.convert_ids_to_tokens(enc["input_ids"].squeeze(0))
+            bio_labels = [id2label_bio[i] for i in bio_ids]
 
+            fixed_labels = self._apply_bio_rules(tokens, bio_labels)
+            spans        = self._merge_spans(tokens, fixed_labels, tokenizer)
+
+            # sentence‑level causal flag
+            is_causal = self._decide_causal(cls_logits, spans, cause_decision)
+
+            # ------------------------------------------------------------------
+            # 2. Relation extraction
+            # ------------------------------------------------------------------
+            rels: List[dict] = []
+            cause_spans  = [s for s in spans if s.role in {"C", "CE"}]
+            effect_spans = [s for s in spans if s.role in {"E", "CE"}]
+
+            if cause_spans and effect_spans:
+                # --- quick heuristic (single‑side singleton) ----------------
+                if rel_mode == "auto" and (len(cause_spans) == 1 or len(effect_spans) == 1):
+                    if len(cause_spans) == 1:  # one cause – many effects
+                        for e in effect_spans:
+                            if cause_spans[0].text.lower() != e.text.lower():
+                                rels.append({"cause": cause_spans[0].text, "effect": e.text, "type": "Rel_CE"})
+                    else:                       # many causes – one effect
+                        for c in cause_spans:
+                            if c.text.lower() != effect_spans[0].text.lower():
+                                rels.append({"cause": c.text, "effect": effect_spans[0].text, "type": "Rel_CE"})
+                else:
+                    # --- relation head scoring ------------------------------
+                    pair_meta = [
+                        (c, e) for c in cause_spans for e in effect_spans
+                        if not (c.start_tok == e.start_tok and c.end_tok == e.end_tok)
+                    ]
+                    if pair_meta:
+                        pair_batch    = torch.zeros(len(pair_meta), dtype=torch.long, device=device)
+                        cause_starts  = torch.tensor([c.start_tok for c, _ in pair_meta], device=device)
+                        cause_ends    = torch.tensor([c.end_tok   for c, _ in pair_meta], device=device)
+                        effect_starts = torch.tensor([e.start_tok for _, e in pair_meta], device=device)
+                        effect_ends   = torch.tensor([e.end_tok   for _, e in pair_meta], device=device)
+
+                        rel_logits = self(
+                            input_ids=enc["input_ids"],
+                            attention_mask=enc["attention_mask"],
+                            pair_batch=pair_batch,
+                            cause_starts=cause_starts,
+                            cause_ends=cause_ends,
+                            effect_starts=effect_starts,
+                            effect_ends=effect_ends,
+                        )["rel_logits"]
+
+                        probs = torch.softmax(rel_logits, dim=-1)[:, 1].tolist()  # Rel_CE column
+                        for (c, e), p in zip(pair_meta, probs):
+                            if p >= rel_threshold and c.text.lower() != e.text.lower():
+                                rels.append({"cause": c.text, "effect": e.text, "type": "Rel_CE"})
+
+            # deduplicate while preserving order
+            seen = set()
+            uniq = []
+            for r in rels:
+                key = (r["cause"].lower(), r["effect"].lower())
+                if key not in seen:
+                    seen.add(key)
+                    uniq.append(r)
+            rels = uniq
+
+            outputs.append({
+                "text": sent,
+                "causal": is_causal,
+                "relations": rels,
+            })
+
+        return outputs
+
+    # ------------------------------------------------------------------
+    # BIO utilities
+    # ------------------------------------------------------------------
     @staticmethod
-    def _merge_spans(tok, lab):
+    def _apply_bio_rules(tok: List[str], lab: List[str]) -> List[str]:
+        """Light‑touch BIO sanitiser that fixes **intra‑span role clashes** and
+        common WordPiece artefacts while deferring to model probabilities.
+
+        Added rule (R‑6)
+        ----------------
+        When a contiguous non‑O block mixes **C** and **E** roles (e.g.
+        ``B‑C I‑C I‑E I‑C``) we collapse the entire block to the *majority*
+        role (ties prefer **C**).  Only the first token keeps the ``B‑`` prefix.
         """
-        Merge contiguous labeled tokens into Span objects, gluing across connectors.
-        """
-        from transformers import AutoTokenizer
-        try:
-            from .config import MODEL_CONFIG
-        except ImportError:
-            from config import MODEL_CONFIG
-        tokenizer = AutoTokenizer.from_pretrained(MODEL_CONFIG["encoder_name"])
-        _CONNECTORS = {"of", "to", "with", "for", "the", "and"}
-        _STOPWORDS = {"this", "that", "these", "those", "it", "they"}
-        spans = []
+        n = len(tok)
+        out = lab.copy()
+
+        # R‑1 propagate to ## -------------------------------------------------
+        for i in range(1, n):
+            if tok[i].startswith("##") and out[i] == "O" and out[i-1] != "O":
+                role = out[i-1].split("-")[-1]
+                out[i] = f"I-{role}"
+
+        # R‑2 stray I‑tags → B ----------------------------------------------
+        for i in range(n):
+            if out[i].startswith("I-") and (i == 0 or out[i-1] == "O"):
+                out[i] = out[i].replace("I-", "B-", 1)
+
+        # R‑3 merge adjacent B blocks of same role ---------------------------
+        for i in range(1, n):
+            if out[i].startswith("B-") and out[i-1] != "O":
+                role_prev = out[i-1].split("-")[-1]
+                role_curr = out[i].split("-")[-1]
+                if role_prev == role_curr:
+                    out[i] = out[i].replace("B-", "I-", 1)
+
+        # R‑4 punctuation labels → O ----------------------------------------
+        PUNCT = {".", ",", ";", ":", "?", "!", "(", ")", "[", "]", "{", "}"}
+        for i, tk in enumerate(tok):
+            if tk in PUNCT:
+                out[i] = "O"
+
+        # R‑5 CE disambiguation ---------------------------------------------
+        roles_present = {tag.split("-")[-1] for tag in out if tag != "O"}
+        if "CE" in roles_present and ("C" not in roles_present or "E" not in roles_present):
+            target = "C" if "C" not in roles_present else "E"
+            for i, tag in enumerate(out):
+                if tag.endswith("CE"):
+                    out[i] = tag[:-2] + target
+
+        # R‑6 intra‑span role clash fix -------------------------------------
         i = 0
-        while i < len(tok):
+        while i < n:
+            if out[i] == "O":
+                i += 1
+                continue
+            start = i
+            role_counts = {"C": 0, "E": 0}
+            while i < n and out[i] != "O":
+                role = out[i].split("-")[-1]
+                if role == "CE":
+                    role_counts["C"] += 1
+                    role_counts["E"] += 1
+                else:
+                    role_counts[role] += 1
+                i += 1
+            maj = "C" if role_counts["C"] >= role_counts["E"] else "E"
+            j = start
+            first = True
+            while j < i:
+                out[j] = ("B-" if first else "I-") + maj
+                first = False
+                j += 1
+
+        # R‑7 connector & mis‑role bridge -----------------------------------
+        CONNECT = {"of", "to", "with", "for", "and", "or", "but", "in"}
+        for k in range(1, n - 1):
+            left_role = out[k - 1].split("-")[-1] if out[k - 1] != "O" else None
+            right_role = out[k + 1].split("-")[-1] if out[k + 1] != "O" else None
+            # 7a: O‑token connector between same‑role labels
+            if out[k] == "O" and left_role and left_role == right_role and tok[k].lower() in CONNECT:
+                out[k] = "I-" + left_role
+            # 7b: mis‑role single token sandwiched by same role C or E
+            if out[k].startswith("I-") and left_role and left_role == right_role and out[k].split("-")[-1] != left_role:
+                out[k] = "I-" + left_role
+
+        return out
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _merge_spans(tok: List[str], lab: List[str], tokenizer) -> List["Span"]:
+        """Merge contiguous tokens of identical role with minimal fixes.
+
+        New in this revision
+        --------------------
+        *   **Hyphen normalisation** – converts "mental well - being" →
+            "mental well-being".
+        *   **Whitespace clean‑up** after stripping stray quotes.
+        *   **Single‑word pruning** – if at least one multi‑word span exists
+            for a role, we drop *other* single‑word spans of that same role.
+        """
+        CONNECT = {"of", "to", "with", "for", "and", "or", "but", "in"}
+        DROP_SINGLE = {
+            # generic verbs/adjectives we do *not* want as standalone spans
+            "facilitate", "facilitates", "increase", "increases", "decrease", "decreases",
+            "improve", "improves", "affect", "affects", "impact", "impacts", "make", "makes",
+            "create", "creates", "produce", "produces", "significant", "primary", "sharp",
+            "substantial"
+        }
+        spans: List[Span] = []
+
+        # 1. Raw span assembly ------------------------------------------------
+        i, n = 0, len(tok)
+        while i < n:
             if lab[i] == "O":
                 i += 1
                 continue
             role = lab[i].split("-")[-1]
             s = i
-            while i + 1 < len(tok) and lab[i + 1] != "O":
-                i += 1
-            spans.append(Span(role, s, i, tokenizer.convert_tokens_to_string(tok[s:i + 1])))
             i += 1
+            while i < n:
+                if lab[i].startswith("I-"):
+                    i += 1
+                    continue
+                if tok[i].lower() in CONNECT and lab[i] == "O" and i + 1 < n and lab[i + 1].startswith("I-"):
+                    i += 1
+                    continue
+                break
+            e = i - 1
+            text = tokenizer.convert_tokens_to_string(tok[s : e + 1])
+            # hyphen & quote clean‑up
+            text = text.replace(" - ", "-").replace(" -", "-").replace("- ", "-")
+            text = text.strip("\"'”’““”")
+            # trim leading/trailing connectors
+            words = text.split()
+            while words and words[0].lower() in CONNECT:
+                words.pop(0)
+            while words and words[-1].lower() in CONNECT:
+                words.pop()
+            if not words:
+                continue
+            text = " ".join(words)
+            # drop unwanted single‑word generic spans
+            if len(words) == 1 and words[0].lower() in DROP_SINGLE:
+                continue
+            spans.append(Span(role, s, e, text))
 
-        merged = [spans[0]] if spans else []
-        for sp in spans[1:]:
-            prv = merged[-1]
-            if sp.role == prv.role and sp.start_tok == prv.end_tok + 2 and tok[prv.end_tok + 1].lower() in _CONNECTORS:
-                # Check if the current span starts with a B tag and a connector is present
-                if lab[sp.start_tok].startswith("B") and tok[prv.end_tok + 1].lower() == "and":
-                    merged.append(sp)
-                else:
-                    merged[-1] = Span(
-                        prv.role,
-                        prv.start_tok,
-                        sp.end_tok,
-                        tokenizer.convert_tokens_to_string(tok[prv.start_tok:sp.end_tok + 1]),
-                        prv.is_virtual
-                    )
-            else:
-                merged.append(sp)
+        # 2. Generic single‑word pruning (role‑aware) --------------------
+        from collections import defaultdict
+        per_role = defaultdict(list)
+        for sp in spans:
+            per_role[sp.role].append(sp)
 
-        # Ensure spans are split when a new span starts with a B tag and a connector is present
-        final_spans = []
-        for span in merged:
-            tokens = tokenizer.tokenize(span.text)
-            if "and" in tokens:
-                split_idx = tokens.index("and")
-                first_part = tokenizer.convert_tokens_to_string(tokens[:split_idx])
-                second_part = tokenizer.convert_tokens_to_string(tokens[split_idx + 1:])
-                final_spans.append(Span(span.role, span.start_tok, span.start_tok + len(first_part.split()), first_part))
-                final_spans.append(Span(span.role, span.start_tok + len(first_part.split()) + 1, span.end_tok, second_part))
-            else:
-                # Trim stopwords from the start and end of the span only if the span length is greater than 1
-                if len(tokens) > 1:
-                    trimmed_tokens = [t for t in tokens if t.lower() not in _STOPWORDS]
-                else:
-                    trimmed_tokens = tokens
-                trimmed_text = tokenizer.convert_tokens_to_string(trimmed_tokens)
-                final_spans.append(Span(span.role, span.start_tok, span.end_tok, trimmed_text))
+        retained: List[Span] = []
+        for role, group in per_role.items():
+            has_non_generic = any(len(g.text.split()) > 1 or g.text.lower() not in DROP_SINGLE for g in group)
+            for sp in group:
+                if len(sp.text.split()) == 1 and sp.text.lower() in DROP_SINGLE and has_non_generic:
+                    continue  # drop generic singleton when better span exists
+                retained.append(sp)
 
-        return final_spans
-
-    @staticmethod
-    def _decide_causal(cls, spans, mode):
-        if mode == "cls_only":
-            return cls.argmax(-1).item() == 1
-        elif mode == "span_only":
-            return any(x.role == "C" for x in spans) and any(x.role == "E" for x in spans)
-        elif mode == "cls+span":
-            return (cls.argmax(-1).item() == 1) and (any(x.role == "C" for x in spans) and any(x.role == "E" for x in spans))
-        else:
-            raise ValueError(mode)
+        retained.sort(key=lambda s: s.start_tok)
+        return retained
 
