@@ -18,22 +18,22 @@ with the following key features:
    but if all spans in a sample are hallucinated, it becomes non-causal.
 
 Usage:
-    from llm2doccano import convert_llama3_to_doccano
+    from llm2doccano import convert_llm_output_to_doccano # Renamed function
     
-    stats = convert_llama3_to_doccano("input.jsonl", "output.jsonl")
+    stats = convert_llm_output_to_doccano("input.jsonl", "output.jsonl") # Renamed function
     print(f"Converted {stats['total_samples']} samples")
 """
 
 import json
 import re
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict, Tuple, Optional, Union # Added Union
 
-def convert_llama3_to_doccano(input_file: str, output_file: str) -> Dict[str, int]:
+def convert_llm_output_to_doccano(input_data: Union[str, List[Dict]], output_file: str) -> Dict[str, int]: # Renamed function
     """
-    Convert LLM raw output format to Doccano training format.
+    Convert LLM raw output format or a list of dictionaries to Doccano training format.
     
     Args:
-        input_file: Path to the LLM raw JSONL file
+        input_data: Path to the LLM raw JSONL file or a list of dictionaries
         output_file: Path to save the converted Doccano format JSONL file
     
     Returns:
@@ -56,16 +56,22 @@ def convert_llama3_to_doccano(input_file: str, output_file: str) -> Dict[str, in
     
     converted_samples = []
     
-    # Read all lines from input file
-    with open(input_file, 'r', encoding='utf-8') as f:
-        lines = f.readlines()
-    
-    print(f"Converting {len(lines)} samples from LLaMA 3 format to Doccano format...")
-    
+    lines_to_process = []
+    if isinstance(input_data, str):
+        # Read all lines from input file
+        with open(input_data, 'r', encoding='utf-8') as f:
+            lines_to_process = f.readlines()
+        print(f"Converting {len(lines_to_process)} samples from file {input_data} to Doccano format...") # Made generic
+    elif isinstance(input_data, list):
+        lines_to_process = [json.dumps(item) for item in input_data] # Convert dicts to JSON strings for consistent processing
+        print(f"Converting {len(lines_to_process)} samples from list input to Doccano format...") # Made generic
+    else:
+        raise ValueError("input_data must be a file path (str) or a list of dictionaries.")
+
     # Process each line
-    for i, line in enumerate(lines):
+    for i, line_content in enumerate(lines_to_process):
         if i % 1000 == 0:
-            print(f"Processing sample {i}/{len(lines)}")
+            print(f"Processing sample {i}/{len(lines_to_process)}")
             
         stats['total_samples'] += 1
         
@@ -74,7 +80,7 @@ def convert_llama3_to_doccano(input_file: str, output_file: str) -> Dict[str, in
         
         try:
             # Extract data from the line
-            text, relations_data, is_causal = extract_data_from_line(line)
+            text, relations_data, is_causal = extract_data_from_line(line_content) # Use line_content
             
             if not text:
                 # No valid text found - use default non-causal
@@ -84,7 +90,7 @@ def convert_llama3_to_doccano(input_file: str, output_file: str) -> Dict[str, in
               # Create sample with extracted text
             sample = {
                 'id': i,
-                'text': text + ';;',  # Add delimiter as in doccano format
+                'text': text if text.endswith(";;") else text + ';;',  # Ensure ;; delimiter
                 'entities': [],
                 'relations': [],
                 'Comments': []
@@ -92,7 +98,7 @@ def convert_llama3_to_doccano(input_file: str, output_file: str) -> Dict[str, in
             
             if not is_causal or not relations_data:
                 # Non-causal case
-                sample = create_non_causal_sample(i, text, stats)
+                sample = create_non_causal_sample(i, text, stats) # text already has ;; if needed
                 stats['non_causal_samples'] += 1
             else:
                 # Causal case - process relations with dual-role handling
@@ -156,14 +162,16 @@ def create_default_sample(sample_id: int, stats: Dict) -> Dict:
 
 def create_non_causal_sample(sample_id: int, text: str, stats: Dict) -> Dict:
     """Create a non-causal sample with the given text."""
+    # Ensure text ends with ';;'
+    processed_text = text if text.endswith(";;") else text + ";;"
     sample = {
         'id': sample_id,
-        'text': text + ';;',
+        'text': processed_text,
         'entities': [{
             'id': stats['entity_count'],
             'label': 'non-causal',
             'start_offset': 0,
-            'end_offset': len(text)
+            'end_offset': len(processed_text) - 2 if processed_text.endswith(";;") else len(processed_text) # Adjust for ;;
         }],
         'relations': [],
         'Comments': []
@@ -173,45 +181,42 @@ def create_non_causal_sample(sample_id: int, text: str, stats: Dict) -> Dict:
 
 def extract_data_from_line(line: str) -> Tuple[str, List[Dict], bool]:
     """
-    Extract text, relations, and causal flag from a LLaMA output line.
+    Extract text, relations, and causal flag from an LLM output line or direct JSON line.
     Uses multiple strategies for robust extraction.
     """
     try:
         line = line.strip()
-        
-        # Remove outer quotes if present (common in LLaMA output)
-        if line.startswith('"') and line.endswith('"'):
-            line = line[1:-1]
-            line = line.replace('\\"', '"').replace('\\n', '\n')
-        
-        # Find JSON block in the line
-        json_match = re.search(r'\{.*\}', line, re.DOTALL)
-        if not json_match:
-            # Try to extract text directly from malformed output
-            text_match = re.search(r'"text":\s*"([^"]*)"', line)
-            if text_match:
-                return text_match.group(1), [], False
-            return "", [], False
-        
-        # Parse JSON with error recovery
+        data = None
+
+        # Attempt to parse directly as JSON (for pr_expert_bert_softmax_cls+span.jsonl format and list input)
         try:
-            data = json.loads(json_match.group())
+            data = json.loads(line)
         except json.JSONDecodeError:
-            # Try to fix common JSON issues
-            json_str = json_match.group()
-            json_str = re.sub(r',\s*}', '}', json_str)  # Remove trailing commas
-            json_str = re.sub(r',\s*]', ']', json_str)
+            # If direct parsing fails, try the previous method for "Here is the output..." format
+            if line.startswith('"') and line.endswith('"'): # Handles "Here is the output..." strings
+                line_content_match = re.search(r'^"(.*)"$', line, re.DOTALL)
+                if line_content_match:
+                    actual_line_content = line_content_match.group(1).replace('\\\\"', '"').replace('\\\\n', '\\n')
+                    # Find JSON block in the line_content
+                    json_match = re.search(r'\\{.*\\}', actual_line_content, re.DOTALL)
+                    if json_match:
+                        json_str = json_match.group()
+                        # Try to fix common JSON issues
+                        json_str = re.sub(r',\\s*\\}', '}', json_str)  # Remove trailing commas
+                        json_str = re.sub(r',\\s*]', ']', json_str)
+                        try:
+                            data = json.loads(json_str)
+                        except json.JSONDecodeError:
+                            pass # Fall through to error handling
             
-            try:
-                data = json.loads(json_str)
-            except json.JSONDecodeError:
-                # Last resort: extract text manually
-                text_match = re.search(r'"text":\s*"([^"]*)"', json_str)
+            if not data: # If still no data, try to extract text directly from malformed output
+                text_match = re.search(r'"text":\\s*"((?:[^"]|\\\\")*)"', line) # Adjusted regex for escaped quotes
                 if text_match:
-                    return text_match.group(1), [], False
+                    extracted_text = text_match.group(1).replace('\\\\"', '"')
+                    return extracted_text, [], False
                 return "", [], False
-        
-        # Extract fields with defaults
+
+        # Extract fields with defaults from parsed data
         text = data.get('text', '').strip()
         is_causal = data.get('causal', False)
         relations_data = data.get('relations', [])
@@ -220,6 +225,10 @@ def extract_data_from_line(line: str) -> Tuple[str, List[Dict], bool]:
         if not isinstance(relations_data, list):
             relations_data = []
         
+        # Ensure text ends with ';;' for consistency before further processing
+        # if text and not text.endswith(";;"):
+        #     text += ";;"
+            
         return text, relations_data, is_causal
         
     except Exception:
@@ -371,13 +380,42 @@ def find_span_in_text(text: str, span: str) -> int:
     # Span not found - likely an LLM hallucination
     return -1
 
-if __name__ == "__main__":
-    input_file = "C:\\Users\\norouzin\\Desktop\\JointLearning\\datasets\\pseudo_annotated_data\\llama3_8b_raw.jsonl"
-    output_file = "C:\\Users\\norouzin\\Desktop\\JointLearning\\datasets\\pseudo_annotated_data\\llama3_8b_doccano.jsonl"
-    stats = convert_llama3_to_doccano(input_file, output_file)
-    print(f"Conversion completed with stats: {stats}")
+# ======================================================
+# Tutorial: How to Use the LLM to Doccano Format Converter
+# ======================================================
+"""
+This script provides a function to convert LLM output or model predictions into Doccano format for annotation or further processing. Below are several usage examples:
 
-    # convert to csv
+1. Convert a JSONL file of LLM output to Doccano format:
+
+    from llm2doccano import convert_llm_output_to_doccano
+    
+    input_file = "path/to/llm_output.jsonl"
+    output_file = "path/to/llm_output_doccano.jsonl"
+    stats = convert_llm_output_to_doccano(input_file, output_file)
+    print(f"Converted {stats['total_samples']} samples.")
+
+2. Convert a list of dictionaries (in-memory data) to Doccano format:
+
+    from llm2doccano import convert_llm_output_to_doccano
+    
+    sample_list = [
+        {"text": "Example sentence 1;;", "causal": True, "relations": [{"cause": "A", "effect": "B", "type": "Rel_CE"}]},
+        {"text": "Example sentence 2;;", "causal": False, "relations": []}
+    ]
+    output_file = "path/to/list_input_doccano.jsonl"
+    stats = convert_llm_output_to_doccano(sample_list, output_file)
+    print(f"Converted {stats['total_samples']} samples.")
+
+3. Convert the resulting Doccano JSONL to CSV (optional):
+
     import pandas as pd
     df = pd.read_json(output_file, lines=True)
     df.to_csv(output_file.replace('.jsonl', '.csv'), index=False)
+    print(f"Successfully converted {output_file} to CSV.")
+
+Notes:
+- The converter preserves the number of samples and handles malformed or non-causal samples robustly.
+- Dual-role entities (spans that are both cause and effect) are handled as separate entities.
+- See the function docstring for details on statistics returned.
+"""
