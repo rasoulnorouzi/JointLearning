@@ -522,28 +522,33 @@ class JointCausalModel(nn.Module, PyTorchModelHubMixin):
             has_multi = any((g.end_tok - g.start_tok) >= 1 for g in group)
             for sp in group:
                 single_tok = (sp.end_tok - sp.start_tok) == 0
+                # Remove verb/pruning logic: do not check for looks_verb
                 if single_tok:
-                    looks_verb = bool(re.fullmatch(r"[a-zA-Z]+(ing|ed|es|s)$", sp.text.lower()))
-                    # pruning logic
                     if role == "C":
-                        if has_multi or looks_verb:
+                        if has_multi:
                             continue
                     elif role == "E":
-                        if has_multi and looks_verb:
+                        if has_multi:
                             continue
                 final.append(sp)
         final.sort(key=lambda s: s.start_tok)
-        # second pass: merge adjacent spans of same role separated by ≤2 tokens of punctuation/connectors
+        # second pass: merge over *pure punctuation* gaps only -----------------
         merged: List[Span] = []
+        def is_punct(tok):
+            return len(tok) == 1 and not tok.isalnum()
         for sp in final:
-            if merged and sp.role == merged[-1].role and sp.start_tok - merged[-1].end_tok <= 2:
-                combined_text = tokenizer.convert_tokens_to_string(tok[merged[-1].start_tok: sp.end_tok + 1]).strip("\"'”’““”")
-                merged[-1] = Span(sp.role, merged[-1].start_tok, sp.end_tok, combined_text)
-            else:
-                merged.append(sp)
+            if merged and sp.role == merged[-1].role:
+                gap_tokens = tok[merged[-1].end_tok + 1 : sp.start_tok]
+                if gap_tokens and all(is_punct(t) for t in gap_tokens):
+                    # safe to merge across punctuation (e.g., apostrophe or hyphen)
+                    combined_text = tokenizer.convert_tokens_to_string(tok[merged[-1].start_tok: sp.end_tok + 1]).strip("\"'”’““”")
+                    merged[-1] = Span(sp.role, merged[-1].start_tok, sp.end_tok, combined_text)
+                    continue
+            merged.append(sp)
         return merged
 
-    
+
+
     def _decide_causal(self, cls_logits, spans, cause_decision):
         """Determine if a sentence is causal based on classification logits and spans.
         
@@ -564,4 +569,3 @@ class JointCausalModel(nn.Module, PyTorchModelHubMixin):
             return has_spans
         else:  # "cls+span" - default behavior
             return prob_causal >= 0.5 and has_spans
-
