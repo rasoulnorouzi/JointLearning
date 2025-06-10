@@ -269,15 +269,20 @@ class JointCausalModel(nn.Module, PyTorchModelHubMixin):
         rel_threshold: float = 0.55,
         cause_decision: str = "cls+span",
     ) -> List[dict]:
-        """End‑to‑end inference for causal sentence extraction.
+        """End‑to‑end inference for causal sentence extraction (batched).
 
-        *   **Sub‑token stitching** – word‑pieces are merged so we never output
-            truncated forms like "ins" or "##pse".
-        *   **Connector bridging** – spans may jump over a single function word
-            (``of``, ``to`` …) when that yields a cleaner phrase.
-        *   **Self‑loops removed** – we never return relations where *cause == effect*.
-        *   **Probability threshold raised** to 0.55 for relation head to
-            reduce spurious pairs.
+        Args:
+            sents: List of input sentences for causal extraction.
+            tokenizer: Tokenizer instance for encoding sentences. If None, a default tokenizer is initialized.
+            rel_mode: Strategy for relation extraction. "auto" mode simplifies relations when spans are limited.
+            rel_threshold: Probability threshold for relation head to reduce spurious pairs.
+            cause_decision: Strategy for determining causality ('cls_only', 'span_only', or 'cls+span').
+
+        Returns:
+            List of dictionaries containing:
+                - "text": Original sentence.
+                - "causal": Boolean indicating if the sentence is causal.
+                - "relations": List of extracted causal relations.
         """
         # ------------------------------------------------------------------
         # 0. Tokeniser & device
@@ -287,102 +292,102 @@ class JointCausalModel(nn.Module, PyTorchModelHubMixin):
             tokenizer = AutoTokenizer.from_pretrained(self.encoder_name, use_fast=True)
 
         device = next(self.parameters()).device
-        to_dev = lambda d: {k: v.to(device) for k, v in d.items()}
+        to_dev = lambda d: {k: v.to(device) for k, v in d.items()}  # Move tensors to the model's device
 
         outputs: List[dict] = []
 
         # ------------------------------------------------------------------
-        # 1. Iterate through sentences
+        # 1. Batch tokenize all sentences
         # ------------------------------------------------------------------
-        for sent in sents:
-            enc = tokenizer(sent, return_tensors="pt", truncation=True, max_length=512)
-            enc = to_dev(enc)
+        enc = tokenizer(sents, return_tensors="pt", truncation=True, max_length=512, padding=True)
+        enc = to_dev(enc)  # Ensure tensors are on the correct device
 
-            with torch.no_grad():
-                base = self(input_ids=enc["input_ids"], attention_mask=enc["attention_mask"])
+        with torch.no_grad():
+            base = self(input_ids=enc["input_ids"], attention_mask=enc["attention_mask"])
 
-            cls_logits = base["cls_logits"].squeeze(0)                    # (2,)
-            bio_ids    = base["bio_emissions"].squeeze(0).argmax(-1).tolist()
-            tokens     = tokenizer.convert_ids_to_tokens(enc["input_ids"].squeeze(0))
-            bio_labels = [id2label_bio[i] for i in bio_ids]
+        cls_logits_batch = base["cls_logits"]              # Sentence-level classification logits
+        bio_emissions_batch = base["bio_emissions"]        # BIO tagging emissions
+        input_ids_batch = enc["input_ids"]                 # Token IDs for each sentence
+        attention_mask_batch = enc["attention_mask"]       # Attention mask for each sentence
 
+        batch_size = input_ids_batch.size(0)
+
+        for i in range(batch_size):
+            seq_len = attention_mask_batch[i].sum().item()  # Determine the actual sequence length
+            input_ids = input_ids_batch[i][:seq_len]        # Trim padding tokens
+            bio_emissions = bio_emissions_batch[i][:seq_len]  # Trim emissions to sequence length
+            tokens = tokenizer.convert_ids_to_tokens(input_ids)  # Convert token IDs to actual tokens
+            bio_ids = bio_emissions.argmax(-1).tolist()    # Get predicted BIO label indices
+            bio_labels = [id2label_bio[j] for j in bio_ids]  # Map indices to label names
+
+            # Apply BIO rules to clean up predictions
             fixed_labels = self._apply_bio_rules(tokens, bio_labels)
-            spans        = self._merge_spans(tokens, fixed_labels, tokenizer)
+            spans = self._merge_spans(tokens, fixed_labels, tokenizer)  # Merge spans based on cleaned labels
 
-            # sentence‑level causal flag
-            is_causal = self._decide_causal(cls_logits, spans, cause_decision)            # ------------------------------------------------------------------
-            # 2. Relation extraction
+            # Determine if the sentence is causal based on classification logits and spans
+            is_causal = self._decide_causal(cls_logits_batch[i], spans, cause_decision)
+
+            # ------------------------------------------------------------------
+            # 2. Relation extraction (per sentence, as before)
             # ------------------------------------------------------------------
             rels: List[dict] = []
-            
-            # Separate spans by role, including CE spans in both categories
-            # CE spans represent entities that can act as both cause and effect
-            pure_cause_spans = [s for s in spans if s.role == "C"]
-            pure_effect_spans = [s for s in spans if s.role == "E"]
-            ce_spans = [s for s in spans if s.role == "CE"]
-            
-            # Create cause and effect lists, with CE spans appearing in both
-            # This allows CE spans to participate as causes AND effects in relations
+            pure_cause_spans = [s for s in spans if s.role == "C"]  # Extract pure cause spans
+            pure_effect_spans = [s for s in spans if s.role == "E"]  # Extract pure effect spans
+            ce_spans = [s for s in spans if s.role == "CE"]  # Extract combined cause-effect spans
             cause_spans = pure_cause_spans + ce_spans
             effect_spans = pure_effect_spans + ce_spans
 
             if cause_spans and effect_spans:
-                # Check if we have enough diversity for CE spans to be meaningful
+                # Check for presence of pure causes/effects and combined spans
                 has_pure_causes = len(pure_cause_spans) > 0
                 has_pure_effects = len(pure_effect_spans) > 0
                 has_ce_spans = len(ce_spans) > 0
-                
-                # If we only have CE spans without pure C or E spans, skip relation extraction
+
                 if has_ce_spans and not (has_pure_causes or has_pure_effects):
-                    pass  # No relations can be formed
+                    # Skip relation extraction if only combined spans exist
+                    pass
                 elif rel_mode == "auto" and (len(cause_spans) == 1 or len(effect_spans) == 1):
-                    # --- quick heuristic (single‑side singleton) ----------------
-                    if len(cause_spans) == 1:  # one cause – many effects
+                    # Simplified relation extraction for single spans
+                    if len(cause_spans) == 1:
                         for e in effect_spans:
-                            # Allow CE spans to relate to different spans, or to themselves if mixed with pure spans
                             if (cause_spans[0].text.lower() != e.text.lower() or 
                                 (cause_spans[0].role == "CE" and e.role != "CE")):
                                 rels.append({"cause": cause_spans[0].text, "effect": e.text, "type": "Rel_CE"})
-                    else:                       # many causes – one effect
+                    else:
                         for c in cause_spans:
-                            # Allow CE spans to relate to different spans, or to themselves if mixed with pure spans
                             if (c.text.lower() != effect_spans[0].text.lower() or 
                                 (c.role == "CE" and effect_spans[0].role != "CE")):
                                 rels.append({"cause": c.text, "effect": effect_spans[0].text, "type": "Rel_CE"})
                 else:
-                    # --- relation head scoring ------------------------------
+                    # Full relation extraction for multiple spans
                     pair_meta = []
                     for c in cause_spans:
                         for e in effect_spans:
-                            # Allow different spans, or CE spans relating to pure C/E spans
                             if (not (c.start_tok == e.start_tok and c.end_tok == e.end_tok) or
                                 (c.role == "CE" and e.role in {"C", "E"}) or
                                 (c.role in {"C", "E"} and e.role == "CE")):
                                 pair_meta.append((c, e))
-                    
                     if pair_meta:
-                        pair_batch    = torch.zeros(len(pair_meta), dtype=torch.long, device=device)
-                        cause_starts  = torch.tensor([c.start_tok for c, _ in pair_meta], device=device)
-                        cause_ends    = torch.tensor([c.end_tok   for c, _ in pair_meta], device=device)
+                        # Prepare tensors for this sentence only
+                        pair_batch = torch.zeros(len(pair_meta), dtype=torch.long, device=device)
+                        cause_starts = torch.tensor([c.start_tok for c, _ in pair_meta], device=device)
+                        cause_ends = torch.tensor([c.end_tok for c, _ in pair_meta], device=device)
                         effect_starts = torch.tensor([e.start_tok for _, e in pair_meta], device=device)
-                        effect_ends   = torch.tensor([e.end_tok   for _, e in pair_meta], device=device)
-
+                        effect_ends = torch.tensor([e.end_tok for _, e in pair_meta], device=device)
                         rel_logits = self(
-                            input_ids=enc["input_ids"],
-                            attention_mask=enc["attention_mask"],
+                            input_ids=input_ids.unsqueeze(0),
+                            attention_mask=attention_mask_batch[i][:seq_len].unsqueeze(0),
                             pair_batch=pair_batch,
                             cause_starts=cause_starts,
                             cause_ends=cause_ends,
                             effect_starts=effect_starts,
                             effect_ends=effect_ends,
                         )["rel_logits"]
-
-                        probs = torch.softmax(rel_logits, dim=-1)[:, 1].tolist()  # Rel_CE column
+                        probs = torch.softmax(rel_logits, dim=-1)[:, 1].tolist()  # Extract probabilities for relation type
                         for (c, e), p in zip(pair_meta, probs):
                             if p >= rel_threshold and c.text.lower() != e.text.lower():
                                 rels.append({"cause": c.text, "effect": e.text, "type": "Rel_CE"})
-
-            # deduplicate while preserving order
+            # Remove duplicate relations
             seen = set()
             uniq = []
             for r in rels:
@@ -392,8 +397,9 @@ class JointCausalModel(nn.Module, PyTorchModelHubMixin):
                     uniq.append(r)
             rels = uniq
 
+            # Append results for this sentence
             outputs.append({
-                "text": sent,
+                "text": sents[i],
                 "causal": is_causal,
                 "relations": rels,
             })
