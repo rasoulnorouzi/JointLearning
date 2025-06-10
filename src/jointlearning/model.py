@@ -256,27 +256,6 @@ class JointCausalModel(nn.Module, PyTorchModelHubMixin):
             "rel_logits": rel_logits, 
         }
 
-    def _decide_causal(self, cls_logits, spans, cause_decision):
-        """Determine if a sentence is causal based on classification logits and spans.
-        
-        Args:
-            cls_logits: Tensor of classification logits
-            spans: List of extracted spans
-            cause_decision: Strategy for determining causality ('cls_only', 'span_only', or 'cls+span')
-            
-        Returns:
-            bool: True if the sentence is determined to be causal
-        """
-        prob_causal = torch.softmax(cls_logits, dim=-1)[1].item()
-        has_spans = bool(spans)
-        
-        if cause_decision == "cls_only":
-            return prob_causal >= 0.5
-        elif cause_decision == "span_only":
-            return has_spans
-        else:  # "cls+span" - default behavior
-            return prob_causal >= 0.5 and has_spans
-
 # ---------------------------------------------------------------------------
 # Refactored prediction & post‑processing utilities for JointCausalModel
 # ---------------------------------------------------------------------------
@@ -560,4 +539,25 @@ class JointCausalModel(nn.Module, PyTorchModelHubMixin):
 
         retained.sort(key=lambda s: s.start_tok)
         return retained
+    
+    def _decide_causal(self, cls_logits, spans, cause_decision):
+        """Determine if a sentence is causal based on classification logits and spans.
+        
+        Args:
+            cls_logits: Tensor of classification logits
+            spans: List of extracted spans
+            cause_decision: Strategy for determining causality ('cls_only', 'span_only', or 'cls+span')
+            
+        Returns:
+            bool: True if the sentence is determined to be causal
+        """
+        prob_causal = torch.softmax(cls_logits, dim=-1)[1].item()
+        has_spans = bool(spans)
+        
+        if cause_decision == "cls_only":
+            return prob_causal >= 0.5
+        elif cause_decision == "span_only":
+            return has_spans
+        else:  # "cls+span" - default behavior
+            return prob_causal >= 0.5 and has_spans
 
