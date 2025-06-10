@@ -412,13 +412,10 @@ class JointCausalModel(nn.Module, PyTorchModelHubMixin):
                 if role_prev == role_curr:
                     out[i] = out[i].replace("B-", "I-", 1)
 
-        # R‑4 punctuation labels → O ----------------------------------------
-        PUNCT = {".", ",", ";", ":", "?", "!", "(", ")", "[", "]", "{", "}"}
-        for i, tk in enumerate(tok):
-            if tk in PUNCT:
-                out[i] = "O"
+        # R‑4 (removed): We no longer force punctuation tokens to O
+        # This keeps apostrophes/hyphens inside spans when the model labels them.
 
-        # R‑5 CE disambiguation ---------------------------------------------
+        # R‑5 CE disambiguation --------------------------------------------- CE disambiguation ---------------------------------------------
         roles_present = {tag.split("-")[-1] for tag in out if tag != "O"}
         if "CE" in roles_present and ("C" not in roles_present or "E" not in roles_present):
             target = "C" if "C" not in roles_present else "E"
@@ -434,7 +431,7 @@ class JointCausalModel(nn.Module, PyTorchModelHubMixin):
                 continue
             start = i
             role_counts = {"C": 0, "E": 0}
-            while i < n and out[i] != "O":
+            while i < n and out[i] != "O" and not (i > start and out[i].startswith("B-")):
                 role = out[i].split("-")[-1]
                 if role == "CE":
                     role_counts["C"] += 1
@@ -450,16 +447,21 @@ class JointCausalModel(nn.Module, PyTorchModelHubMixin):
                 first = False
                 j += 1
 
-        # R‑7 connector & mis‑role bridge -----------------------------------
+        # R‑7 connector & punctuation bridge ----------------------------------
         CONNECT = {"of", "to", "with", "for", "and", "or", "but", "in"}
         for k in range(1, n - 1):
-            left_role = out[k - 1].split("-")[-1] if out[k - 1] != "O" else None
+            left_role  = out[k - 1].split("-")[-1] if out[k - 1] != "O" else None
             right_role = out[k + 1].split("-")[-1] if out[k + 1] != "O" else None
-            # 7a: O‑token connector between same‑role labels
-            if out[k] == "O" and left_role and left_role == right_role and tok[k].lower() in CONNECT:
+            if not left_role or left_role != right_role:
+                continue
+            # 7a: connector word originally tagged O
+            if out[k] == "O" and tok[k].lower() in CONNECT:
                 out[k] = "I-" + left_role
-            # 7b: mis‑role single token sandwiched by same role C or E
-            if out[k].startswith("I-") and left_role and left_role == right_role and out[k].split("-")[-1] != left_role:
+            # 7b: single‑char punctuation / hyphen / apostrophe bridge
+            elif out[k] == "O" and len(tok[k]) == 1 and not tok[k].isalnum():
+                out[k] = "I-" + left_role
+            # 7c: mis‑role single token sandwiched by same role
+            elif out[k].startswith("I-") and out[k].split("-")[-1] != left_role:
                 out[k] = "I-" + left_role
 
         return out
@@ -467,49 +469,38 @@ class JointCausalModel(nn.Module, PyTorchModelHubMixin):
     # ------------------------------------------------------------------
     @staticmethod
     def _merge_spans(tok: List[str], lab: List[str], tokenizer) -> List["Span"]:
-        """Merge contiguous tokens of identical role with minimal fixes.
+        """Turn cleaned BIO labels into Span objects.
 
-        New in this revision
-        --------------------
-        *   **Hyphen normalisation** – converts "mental well - being" →
-            "mental well-being".
-        *   **Whitespace clean‑up** after stripping stray quotes.
-        *   **Single‑word pruning** – if at least one multi‑word span exists
-            for a role, we drop *other* single‑word spans of that same role.
+        Policy:
+        1. **First pass** – assemble raw spans, letting them bridge a single
+           connector (of, to, with, for, and, or, but, in).
+        2. **Trim** leading/trailing connectors & punctuation.
+        3. **Normalise** hyphen spacing & strip quotes.
+        4. **Role‑wise pruning** – if a role has ≥1 span with *≥2 words*, drop
+           *all* its 1‑word spans.  This removes stray nouns like "choices"
+           while preserving them when they are the *only* cause/effect.
         """
         CONNECT = {"of", "to", "with", "for", "and", "or", "but", "in"}
-        DROP_SINGLE = {
-            # generic verbs/adjectives we do *not* want as standalone spans
-            "facilitate", "facilitates", "increase", "increases", "decrease", "decreases",
-            "improve", "improves", "affect", "affects", "impact", "impacts", "make", "makes",
-            "create", "creates", "produce", "produces", "significant", "primary", "sharp",
-            "substantial"
-        }
-        spans: List[Span] = []
 
-        # 1. Raw span assembly ------------------------------------------------
+        spans: List[Span] = []
         i, n = 0, len(tok)
         while i < n:
             if lab[i] == "O":
-                i += 1
-                continue
+                i += 1; continue
             role = lab[i].split("-")[-1]
             s = i
             i += 1
             while i < n:
                 if lab[i].startswith("I-"):
-                    i += 1
-                    continue
-                if tok[i].lower() in CONNECT and lab[i] == "O" and i + 1 < n and lab[i + 1].startswith("I-"):
-                    i += 1
-                    continue
+                    i += 1; continue
+                if tok[i].lower() in CONNECT and lab[i] == "O" and i+1 < n and lab[i+1].startswith("I-"):
+                    i += 1; continue
                 break
             e = i - 1
-            text = tokenizer.convert_tokens_to_string(tok[s : e + 1])
-            # hyphen & quote clean‑up
+            text = tokenizer.convert_tokens_to_string(tok[s:e+1])
+            # basic cleanup
             text = text.replace(" - ", "-").replace(" -", "-").replace("- ", "-")
             text = text.strip("\"'”’““”")
-            # trim leading/trailing connectors
             words = text.split()
             while words and words[0].lower() in CONNECT:
                 words.pop(0)
@@ -517,28 +508,41 @@ class JointCausalModel(nn.Module, PyTorchModelHubMixin):
                 words.pop()
             if not words:
                 continue
-            text = " ".join(words)
-            # drop unwanted single‑word generic spans
-            if len(words) == 1 and words[0].lower() in DROP_SINGLE:
-                continue
-            spans.append(Span(role, s, e, text))
+            clean_text = " ".join(words)
+            spans.append(Span(role, s, e, clean_text))
 
-        # 2. Generic single‑word pruning (role‑aware) --------------------
-        from collections import defaultdict
-        per_role = defaultdict(list)
+        # role‑wise pruning --------------------------------------------------
+        from collections import defaultdict, OrderedDict
+        import re
+        by_role = defaultdict(list)
         for sp in spans:
-            per_role[sp.role].append(sp)
-
-        retained: List[Span] = []
-        for role, group in per_role.items():
-            has_non_generic = any(len(g.text.split()) > 1 or g.text.lower() not in DROP_SINGLE for g in group)
+            by_role[sp.role].append(sp)
+        final: List[Span] = []
+        for role, group in by_role.items():
+            has_multi = any((g.end_tok - g.start_tok) >= 1 for g in group)
             for sp in group:
-                if len(sp.text.split()) == 1 and sp.text.lower() in DROP_SINGLE and has_non_generic:
-                    continue  # drop generic singleton when better span exists
-                retained.append(sp)
+                single_tok = (sp.end_tok - sp.start_tok) == 0
+                if single_tok:
+                    looks_verb = bool(re.fullmatch(r"[a-zA-Z]+(ing|ed|es|s)$", sp.text.lower()))
+                    # pruning logic
+                    if role == "C":
+                        if has_multi or looks_verb:
+                            continue
+                    elif role == "E":
+                        if has_multi and looks_verb:
+                            continue
+                final.append(sp)
+        final.sort(key=lambda s: s.start_tok)
+        # second pass: merge adjacent spans of same role separated by ≤2 tokens of punctuation/connectors
+        merged: List[Span] = []
+        for sp in final:
+            if merged and sp.role == merged[-1].role and sp.start_tok - merged[-1].end_tok <= 2:
+                combined_text = tokenizer.convert_tokens_to_string(tok[merged[-1].start_tok: sp.end_tok + 1]).strip("\"'”’““”")
+                merged[-1] = Span(sp.role, merged[-1].start_tok, sp.end_tok, combined_text)
+            else:
+                merged.append(sp)
+        return merged
 
-        retained.sort(key=lambda s: s.start_tok)
-        return retained
     
     def _decide_causal(self, cls_logits, spans, cause_decision):
         """Determine if a sentence is causal based on classification logits and spans.
