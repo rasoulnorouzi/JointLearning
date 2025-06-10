@@ -46,7 +46,8 @@ def main():
         "Consistent and responsive caregiving in the first year of life is a crucial factor in the development of a secure attachment style in children.",
         "The prolonged drought led to widespread crop failure, which in turn caused a sharp increase in food prices, ultimately contributing to social unrest in the region.",
         "social exclusion increases aggression and selfdefeating behavior while reducing intelligent thought and prosocial behavior.;;",
-        "with careful attention to subjects' choices, we found that some factors representing personal traits make altruistic behavior recognizably different.;;"
+        "with careful attention to subjects' choices, we found that some factors representing personal traits make altruistic behavior recognizably different.;;",
+        "Reinforcement Sensitivity Theory (RST) (Gray & McNaughton, 2000) proposes that sensitivities to rewards and punishment explain the variation in personality traits and as such this paper examines the relationship between traits within this theoretical framework and behaviour in a public goods game (PGG).;;"
         ]
 
     # Load model and tokenizer
@@ -64,7 +65,7 @@ def main():
         tokenizer=TOKENIZER,
         rel_mode="auto",           # or "auto"
         rel_threshold=0.5,         # adjust as needed
-        cause_decision="cls+span" # or "cls_only", "span_only"
+        cause_decision="span_only" # or "cls_only", "span_only"
     )
 
     # Print results

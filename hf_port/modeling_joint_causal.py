@@ -377,12 +377,20 @@ class JointCausalModel(PreTrainedModel):
                     uniq.append(r)
             rels = uniq
 
-            # Append results for this sentence
-            outputs.append({
-                "text": sents[i],
-                "causal": is_causal,
-                "relations": rels,
-            })
+            # If the sentence is predicted as non-causal, ensure no spans or relations are returned
+            if not is_causal:
+                outputs.append({
+                    "text": sents[i],
+                    "causal": is_causal,
+                    "relations": [],  # Empty relations
+                    "spans": [],       # Empty spans
+                })
+            else:
+                outputs.append({
+                    "text": sents[i],
+                    "causal": is_causal,
+                    "relations": rels,
+                })
 
         return outputs
 
