@@ -7,11 +7,11 @@ import json
 # %%
 # This simple, standard call will now work perfectly.
 model = AutoModel.from_pretrained(
-    "rasoultilburg/SocioCausaNet",
+    "hf_port/joint_causal_model_for_hf",
     trust_remote_code=True,
 )
 tokenizer = AutoTokenizer.from_pretrained(
-    "rasoultilburg/SocioCausaNet",
+    "hf_port/joint_causal_model_for_hf",
     trust_remote_code=True,
 )
 print(f"Successfully loaded model of type: {type(model)}")
