@@ -18,7 +18,7 @@ api.upload_folder(
     folder_path=LOCAL_FOLDER,
     repo_id=REPO_ID,
     repo_type="model",
-    commit_message="improved post processing to handle CE cases and better merging!"
+    commit_message="editing causal detection model",
 )
 
 print("\nUpload complete!")
