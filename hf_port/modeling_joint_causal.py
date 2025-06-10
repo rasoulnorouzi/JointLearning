@@ -235,8 +235,6 @@ class JointCausalModel(PreTrainedModel):
             "tag_loss": tag_loss, 
             "rel_logits": rel_logits, 
         }
-    
-
 
 # ---------------------------------------------------------------------------
 # Refactored prediction & post‑processing utilities for JointCausalModel
@@ -292,32 +290,56 @@ class JointCausalModel(PreTrainedModel):
             spans        = self._merge_spans(tokens, fixed_labels, tokenizer)
 
             # sentence‑level causal flag
-            is_causal = self._decide_causal(cls_logits, spans, cause_decision)
-
-            # ------------------------------------------------------------------
+            is_causal = self._decide_causal(cls_logits, spans, cause_decision)            # ------------------------------------------------------------------
             # 2. Relation extraction
             # ------------------------------------------------------------------
             rels: List[dict] = []
-            cause_spans  = [s for s in spans if s.role in {"C", "CE"}]
-            effect_spans = [s for s in spans if s.role in {"E", "CE"}]
+            
+            # Separate spans by role, including CE spans in both categories
+            # CE spans represent entities that can act as both cause and effect
+            pure_cause_spans = [s for s in spans if s.role == "C"]
+            pure_effect_spans = [s for s in spans if s.role == "E"]
+            ce_spans = [s for s in spans if s.role == "CE"]
+            
+            # Create cause and effect lists, with CE spans appearing in both
+            # This allows CE spans to participate as causes AND effects in relations
+            cause_spans = pure_cause_spans + ce_spans
+            effect_spans = pure_effect_spans + ce_spans
 
             if cause_spans and effect_spans:
-                # --- quick heuristic (single‑side singleton) ----------------
-                if rel_mode == "auto" and (len(cause_spans) == 1 or len(effect_spans) == 1):
+                # Check if we have enough diversity for CE spans to be meaningful
+                has_pure_causes = len(pure_cause_spans) > 0
+                has_pure_effects = len(pure_effect_spans) > 0
+                has_ce_spans = len(ce_spans) > 0
+                
+                # If we only have CE spans without pure C or E spans, skip relation extraction
+                if has_ce_spans and not (has_pure_causes or has_pure_effects):
+                    pass  # No relations can be formed
+                elif rel_mode == "auto" and (len(cause_spans) == 1 or len(effect_spans) == 1):
+                    # --- quick heuristic (single‑side singleton) ----------------
                     if len(cause_spans) == 1:  # one cause – many effects
                         for e in effect_spans:
-                            if cause_spans[0].text.lower() != e.text.lower():
+                            # Allow CE spans to relate to different spans, or to themselves if mixed with pure spans
+                            if (cause_spans[0].text.lower() != e.text.lower() or 
+                                (cause_spans[0].role == "CE" and e.role != "CE")):
                                 rels.append({"cause": cause_spans[0].text, "effect": e.text, "type": "Rel_CE"})
                     else:                       # many causes – one effect
                         for c in cause_spans:
-                            if c.text.lower() != effect_spans[0].text.lower():
+                            # Allow CE spans to relate to different spans, or to themselves if mixed with pure spans
+                            if (c.text.lower() != effect_spans[0].text.lower() or 
+                                (c.role == "CE" and effect_spans[0].role != "CE")):
                                 rels.append({"cause": c.text, "effect": effect_spans[0].text, "type": "Rel_CE"})
                 else:
                     # --- relation head scoring ------------------------------
-                    pair_meta = [
-                        (c, e) for c in cause_spans for e in effect_spans
-                        if not (c.start_tok == e.start_tok and c.end_tok == e.end_tok)
-                    ]
+                    pair_meta = []
+                    for c in cause_spans:
+                        for e in effect_spans:
+                            # Allow different spans, or CE spans relating to pure C/E spans
+                            if (not (c.start_tok == e.start_tok and c.end_tok == e.end_tok) or
+                                (c.role == "CE" and e.role in {"C", "E"}) or
+                                (c.role in {"C", "E"} and e.role == "CE")):
+                                pair_meta.append((c, e))
+                    
                     if pair_meta:
                         pair_batch    = torch.zeros(len(pair_meta), dtype=torch.long, device=device)
                         cause_starts  = torch.tensor([c.start_tok for c, _ in pair_meta], device=device)
@@ -395,39 +417,78 @@ class JointCausalModel(PreTrainedModel):
                     out[i] = out[i].replace("B-", "I-", 1)
 
         # R‑4 (removed): We no longer force punctuation tokens to O
-        # This keeps apostrophes/hyphens inside spans when the model labels them.
-
-        # R‑5 CE disambiguation --------------------------------------------- CE disambiguation ---------------------------------------------
+        # This keeps apostrophes/hyphens inside spans when the model labels them.        # R‑5 CE disambiguation - only convert CE if no other roles present
         roles_present = {tag.split("-")[-1] for tag in out if tag != "O"}
-        if "CE" in roles_present and ("C" not in roles_present or "E" not in roles_present):
-            target = "C" if "C" not in roles_present else "E"
+        if "CE" in roles_present and "C" not in roles_present and "E" not in roles_present:
+            # Only CE tags present - convert all to C (arbitrary choice)
             for i, tag in enumerate(out):
                 if tag.endswith("CE"):
-                    out[i] = tag[:-2] + target
+                    out[i] = tag[:-2] + "C"
 
-        # R‑6 intra‑span role clash fix -------------------------------------
+        # R‑6 intra‑span role clash fix - preserve CE spans when meaningful
         i = 0
         while i < n:
             if out[i] == "O":
                 i += 1
                 continue
             start = i
-            role_counts = {"C": 0, "E": 0}
+            role_counts = {"C": 0, "E": 0, "CE": 0}
+            has_mixed_roles = False
+            
+            # Count roles in this span and check for mixing
             while i < n and out[i] != "O" and not (i > start and out[i].startswith("B-")):
                 role = out[i].split("-")[-1]
-                if role == "CE":
-                    role_counts["C"] += 1
-                    role_counts["E"] += 1
-                else:
-                    role_counts[role] += 1
+                role_counts[role] += 1
                 i += 1
-            maj = "C" if role_counts["C"] >= role_counts["E"] else "E"
+            
+            # Check if span has mixed C/E roles (not including CE)
+            non_ce_roles = set()
             j = start
-            first = True
             while j < i:
-                out[j] = ("B-" if first else "I-") + maj
-                first = False
+                role = out[j].split("-")[-1]
+                if role in {"C", "E"}:
+                    non_ce_roles.add(role)
                 j += 1
+            
+            if len(non_ce_roles) > 1:
+                # Mixed C and E tags - resolve to majority
+                maj = "C" if role_counts["C"] >= role_counts["E"] else "E"
+                j = start
+                first = True
+                while j < i:
+                    out[j] = ("B-" if first else "I-") + maj
+                    first = False
+                    j += 1
+            elif role_counts["CE"] > 0 and len(non_ce_roles) == 0:
+                # Pure CE span - keep as CE
+                j = start
+                first = True
+                while j < i:
+                    out[j] = ("B-" if first else "I-") + "CE"
+                    first = False
+                    j += 1
+            elif role_counts["CE"] > 0 and len(non_ce_roles) == 1:
+                # CE mixed with single pure role - check if CE is meaningful
+                # If we have other pure spans of different types, keep CE
+                other_roles = {tag.split("-")[-1] for tag in out if tag != "O"}
+                pure_role = list(non_ce_roles)[0]
+                
+                if (pure_role == "C" and "E" in other_roles) or (pure_role == "E" and "C" in other_roles):
+                    # CE is meaningful - keep it
+                    j = start
+                    first = True
+                    while j < i:
+                        out[j] = ("B-" if first else "I-") + "CE"
+                        first = False
+                        j += 1
+                else:
+                    # CE not meaningful - convert to pure role
+                    j = start
+                    first = True
+                    while j < i:
+                        out[j] = ("B-" if first else "I-") + pure_role
+                        first = False
+                        j += 1
 
         # R‑7 connector & punctuation bridge ----------------------------------
         CONNECT = {"of", "to", "with", "for", "and", "or", "but", "in"}
@@ -441,10 +502,58 @@ class JointCausalModel(PreTrainedModel):
                 out[k] = "I-" + left_role
             # 7b: single‑char punctuation / hyphen / apostrophe bridge
             elif out[k] == "O" and len(tok[k]) == 1 and not tok[k].isalnum():
-                out[k] = "I-" + left_role
-            # 7c: mis‑role single token sandwiched by same role
+                out[k] = "I-" + left_role            # 7c: mis‑role single token sandwiched by same role
             elif out[k].startswith("I-") and out[k].split("-")[-1] != left_role:
                 out[k] = "I-" + left_role
+
+        # R‑8 gap‑tolerant B‑tag merging ------------------------------------
+        # Merge B- tags of the same type separated by small gaps (≤1 O tokens)
+        # This reduces span fragmentation like "B-E O B-E" -> "B-E I-E I-E"
+        b_positions = {}
+        for i, label in enumerate(out):
+            if label.startswith("B-"):
+                role = label.split("-")[1]
+                if role not in b_positions:
+                    b_positions[role] = []
+                b_positions[role].append(i)
+        
+        for role, positions in b_positions.items():
+            if len(positions) < 2:
+                continue
+                
+            # Group positions that are close together (gap ≤ 1)
+            groups = []
+            current_group = [positions[0]]
+            
+            for i in range(1, len(positions)):
+                prev_pos = positions[i-1]
+                curr_pos = positions[i]
+                gap_size = curr_pos - prev_pos - 1
+                
+                if gap_size <= 1:  # Allow gaps of 0 or 1 O tokens
+                    gap_labels = out[prev_pos + 1:curr_pos]
+                    if all(label == "O" for label in gap_labels):
+                        current_group.append(curr_pos)
+                    else:
+                        groups.append(current_group)
+                        current_group = [curr_pos]
+                else:
+                    groups.append(current_group)
+                    current_group = [curr_pos]
+            
+            groups.append(current_group)
+            
+            # Merge groups with multiple B- tags
+            for group in groups:
+                if len(group) > 1:
+                    first_pos = group[0]
+                    last_pos = group[-1]
+                    
+                    for pos in range(first_pos + 1, last_pos + 1):
+                        if pos in group[1:]:  # B- tag to convert
+                            out[pos] = f"I-{role}"
+                        elif out[pos] == "O":  # Fill gap
+                            out[pos] = f"I-{role}"
 
         return out
 
@@ -491,9 +600,7 @@ class JointCausalModel(PreTrainedModel):
             if not words:
                 continue
             clean_text = " ".join(words)
-            spans.append(Span(role, s, e, clean_text))
-
-        # role‑wise pruning --------------------------------------------------
+            spans.append(Span(role, s, e, clean_text))        # role‑wise pruning --------------------------------------------------
         from collections import defaultdict, OrderedDict
         import re
         by_role = defaultdict(list)
@@ -504,13 +611,18 @@ class JointCausalModel(PreTrainedModel):
             has_multi = any((g.end_tok - g.start_tok) >= 1 for g in group)
             for sp in group:
                 single_tok = (sp.end_tok - sp.start_tok) == 0
-                # Remove verb/pruning logic: do not check for looks_verb
+                # Only remove single-token spans if they look like artifacts
+                # Keep all meaningful single-token spans like "depression", "cancer", etc.
                 if single_tok:
-                    if role == "C":
-                        if has_multi:
-                            continue
-                    elif role == "E":
-                        if has_multi:
+                    # Check if the span text looks like a meaningful entity
+                    is_meaningful = (
+                        len(sp.text) > 2 and  # Longer than 2 characters
+                        sp.text.isalpha() and  # Only alphabetic characters
+                        not sp.text.lower() in {"this", "that", "it", "they", "them", "he", "she", "we", "i", "you"}  # Not pronouns
+                    )
+                    if not is_meaningful and has_multi:
+                        # Only skip single-token spans that seem like artifacts when multi-token spans exist
+                        if role == "C" or role == "E":
                             continue
                 final.append(sp)
         final.sort(key=lambda s: s.start_tok)
@@ -529,8 +641,6 @@ class JointCausalModel(PreTrainedModel):
             merged.append(sp)
         return merged
 
-
-
     def _decide_causal(self, cls_logits, spans, cause_decision):
         """Determine if a sentence is causal based on classification logits and spans.
         
@@ -543,11 +653,15 @@ class JointCausalModel(PreTrainedModel):
             bool: True if the sentence is determined to be causal
         """
         prob_causal = torch.softmax(cls_logits, dim=-1)[1].item()
-        has_spans = bool(spans)
+        
+        # Check for presence of both cause and effect spans (CE spans count as both)
+        has_cause_spans = any(x.role in ("C", "CE") for x in spans)
+        has_effect_spans = any(x.role in ("E", "CE") for x in spans)
+        has_both_spans = has_cause_spans and has_effect_spans
         
         if cause_decision == "cls_only":
             return prob_causal >= 0.5
         elif cause_decision == "span_only":
-            return has_spans
+            return has_both_spans
         else:  # "cls+span" - default behavior
-            return prob_causal >= 0.5 and has_spans
+            return prob_causal >= 0.5 and has_both_spans

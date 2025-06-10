@@ -661,8 +661,6 @@ class JointCausalModel(nn.Module, PyTorchModelHubMixin):
             merged.append(sp)
         return merged
 
-
-
     def _decide_causal(self, cls_logits, spans, cause_decision):
         """Determine if a sentence is causal based on classification logits and spans.
         
@@ -675,11 +673,15 @@ class JointCausalModel(nn.Module, PyTorchModelHubMixin):
             bool: True if the sentence is determined to be causal
         """
         prob_causal = torch.softmax(cls_logits, dim=-1)[1].item()
-        has_spans = bool(spans)
+        
+        # Check for presence of both cause and effect spans (CE spans count as both)
+        has_cause_spans = any(x.role in ("C", "CE") for x in spans)
+        has_effect_spans = any(x.role in ("E", "CE") for x in spans)
+        has_both_spans = has_cause_spans and has_effect_spans
         
         if cause_decision == "cls_only":
             return prob_causal >= 0.5
         elif cause_decision == "span_only":
-            return has_spans
+            return has_both_spans
         else:  # "cls+span" - default behavior
-            return prob_causal >= 0.5 and has_spans
+            return prob_causal >= 0.5 and has_both_spans
