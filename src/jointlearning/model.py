@@ -522,10 +522,58 @@ class JointCausalModel(nn.Module, PyTorchModelHubMixin):
                 out[k] = "I-" + left_role
             # 7b: single‑char punctuation / hyphen / apostrophe bridge
             elif out[k] == "O" and len(tok[k]) == 1 and not tok[k].isalnum():
-                out[k] = "I-" + left_role
-            # 7c: mis‑role single token sandwiched by same role
+                out[k] = "I-" + left_role            # 7c: mis‑role single token sandwiched by same role
             elif out[k].startswith("I-") and out[k].split("-")[-1] != left_role:
                 out[k] = "I-" + left_role
+
+        # R‑8 gap‑tolerant B‑tag merging ------------------------------------
+        # Merge B- tags of the same type separated by small gaps (≤1 O tokens)
+        # This reduces span fragmentation like "B-E O B-E" -> "B-E I-E I-E"
+        b_positions = {}
+        for i, label in enumerate(out):
+            if label.startswith("B-"):
+                role = label.split("-")[1]
+                if role not in b_positions:
+                    b_positions[role] = []
+                b_positions[role].append(i)
+        
+        for role, positions in b_positions.items():
+            if len(positions) < 2:
+                continue
+                
+            # Group positions that are close together (gap ≤ 1)
+            groups = []
+            current_group = [positions[0]]
+            
+            for i in range(1, len(positions)):
+                prev_pos = positions[i-1]
+                curr_pos = positions[i]
+                gap_size = curr_pos - prev_pos - 1
+                
+                if gap_size <= 1:  # Allow gaps of 0 or 1 O tokens
+                    gap_labels = out[prev_pos + 1:curr_pos]
+                    if all(label == "O" for label in gap_labels):
+                        current_group.append(curr_pos)
+                    else:
+                        groups.append(current_group)
+                        current_group = [curr_pos]
+                else:
+                    groups.append(current_group)
+                    current_group = [curr_pos]
+            
+            groups.append(current_group)
+            
+            # Merge groups with multiple B- tags
+            for group in groups:
+                if len(group) > 1:
+                    first_pos = group[0]
+                    last_pos = group[-1]
+                    
+                    for pos in range(first_pos + 1, last_pos + 1):
+                        if pos in group[1:]:  # B- tag to convert
+                            out[pos] = f"I-{role}"
+                        elif out[pos] == "O":  # Fill gap
+                            out[pos] = f"I-{role}"
 
         return out
 
