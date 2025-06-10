@@ -1,5 +1,7 @@
 from collections import Counter, defaultdict
 from typing import List, Dict, Tuple
+import pathlib
+import json
 
 Span = Tuple[int,int]
 Entity = Tuple[int,int,str,str]
@@ -140,38 +142,89 @@ def _task2(gold, pred, scenario="A"):
     return rep
 
 
-def _task3(gold, pred):
+def _task3(gold_docs, pred_docs, label_map=None, penalise_orphans=False):
+    """
+    Relation-classification metric (best-practice version).
+
+    * One-to-one greedy assignment: iterate over gold links first.
+    * Extra predicted links → FP; missing ones → FN.
+    * Each match additionally checks the relation label / polarity.
+
+    Args
+    ----
+    gold_docs : list[dict]   parsed gold documents
+    pred_docs : list[dict]   parsed prediction documents (same order)
+    label_map : dict or None optional {raw_label → normalised_label}
+
+    Returns
+    -------
+    dict  with TP / FP / FN, Precision, Recall, F1, Accuracy
+    """
+    def norm(lbl):
+        return label_map.get(lbl, lbl) if label_map else lbl
+
     cnt = Counter()
-    for g, p in zip(gold, pred):
-        ge = {eid: (s, e, l) for s, e, l, eid in g["entities"]}
-        pe = {eid: (s, e, l) for s, e, l, eid in p["entities"]}
-        def get(emap, rels):
-            res = set()
-            for src, tgt, pol in rels:
-                if src in emap and tgt in emap:
-                    s1, e1, l1 = emap[src]; s2, e2, l2 = emap[tgt]
-                    if l1 == "cause" and l2 == "effect":
-                        res.add(((s1, e1), (s2, e2), pol))
-            return res
-        gr = get(ge, g["relations"]); pr = get(pe, p["relations"])
-        matched = set()
-        for prr in pr:
-            ps_c, ps_e, pp = prr; hit = False
-            for grr in gr:
-                gs_c, gs_e, gp = grr
-                if gp == pp and intervals_overlap(ps_c, gs_c) and intervals_overlap(ps_e, gs_e) and grr not in matched:
-                    matched.add(grr); cnt["TP"] += 1; hit = True; break
-            if not hit:
-                cnt["FP"] += 1
-        cnt["FN"] += len(gr) - len(matched)
+
+    for g_doc, p_doc in zip(gold_docs, pred_docs):
+        # ---- build entity maps ----
+        g_ent = {eid: (s, e, lbl) for s, e, lbl, eid in g_doc["entities"]}
+        p_ent = {eid: (s, e, lbl) for s, e, lbl, eid in p_doc["entities"]}
+
+        # ---- collect Cause→Effect links ----
+        gold_links = [((g_ent[s][0], g_ent[s][1]),
+                       (g_ent[t][0], g_ent[t][1]),
+                       norm(rel_lbl))
+                      for s, t, rel_lbl in g_doc["relations"]
+                      if s in g_ent and t in g_ent
+                      and g_ent[s][2] == "cause"
+                      and g_ent[t][2] == "effect"]
+
+        pred_links = [((p_ent[s][0], p_ent[s][1]),
+                       (p_ent[t][0], p_ent[t][1]),
+                       norm(rel_lbl))
+                      for s, t, rel_lbl in p_doc["relations"]
+                      if s in p_ent and t in p_ent
+                      and p_ent[s][2] == "cause"
+                      and p_ent[t][2] == "effect"]
+
+        used_pred = set()        # indices of predictions already matched
+
+        # ---- gold-first greedy matching ----
+        for gs_c, gs_e, g_lab in gold_links:
+            match_idx = -1
+            for i_p, (ps_c, ps_e, _) in enumerate(pred_links):
+                if i_p in used_pred:
+                    continue
+                if intervals_overlap(gs_c, ps_c) and intervals_overlap(gs_e, ps_e):
+                    match_idx = i_p
+                    break
+
+            if match_idx == -1:             # no prediction overlaps this gold link
+                cnt["FN"] += 1
+            else:
+                used_pred.add(match_idx)
+                _, _, p_lab = pred_links[match_idx]
+                if p_lab == g_lab:
+                    cnt["TP"] += 1
+                else:
+                    cnt["FP"] += 1          # spans matched but wrong label
+
+        # ---- any remaining predictions are spurious ----
+        if penalise_orphans:
+            cnt["FP"] += len(pred_links) - len(used_pred)
+
+    # ---- summary statistics ----
     tp, fp, fn = cnt["TP"], cnt["FP"], cnt["FN"]
-    prec = tp / (tp + fp) if tp + fp else 0
-    rec = tp / (tp + fn) if tp + fn else 0
-    f1 = 2 * tp / (2 * tp + fp + fn) if tp else 0
-    return {"TP": tp, "FP": fp, "FN": fn, "Precision": prec, "Recall": rec, "F1": f1}
+    prec = tp / (tp + fp) if tp + fp else 0.0
+    rec  = tp / (tp + fn) if tp + fn else 0.0
+    f1   = 2 * prec * rec / (prec + rec) if prec + rec else 0.0
+    acc  = tp / (tp + fp + fn) if tp + fp + fn else 0.0
+    return {"TP": tp, "FP": fp, "FN": fn,
+            "Accuracy": acc, "Precision": prec, "Recall": rec, "F1": f1}
+
 
 # Driver evaluate function unchanged
-def evaluate(gold_path, pred_path, scenario_task2='A'):
+def evaluate(gold_path, pred_path, scenario_task2='A', penalise_orphans=False):
     """
     Main evaluation function that runs all three evaluation tasks.
     
@@ -193,7 +246,7 @@ def evaluate(gold_path, pred_path, scenario_task2='A'):
         raise ValueError("Order mismatch")
     return {"Task1":_task1(gold,pred),
             "Task2":_task2(gold,pred,scenario_task2),
-            "Task3":_task3(gold,pred)}
+            "Task3":_task3(gold,pred, penalise_orphans=penalise_orphans)}
 
 def display_results(results, scenario):
     """
