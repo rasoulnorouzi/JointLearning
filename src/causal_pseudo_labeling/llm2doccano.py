@@ -18,32 +18,29 @@ with the following key features:
    but if all spans in a sample are hallucinated, it becomes non-causal.
 
 Usage:
-    from llm2doccano import convert_llm_output_to_doccano # Renamed function
+    from llm2doccano import convert_llm_output_to_doccano
     
-    stats = convert_llm_output_to_doccano("input.jsonl", "output.jsonl") # Renamed function
-    print(f"Converted {stats['total_samples']} samples")
+    df = convert_llm_output_to_doccano("input.jsonl")
+    print(f"Converted {df.shape[0]} samples to DataFrame")
+    df.to_csv("output.csv", index=False)
 """
 
 import json
 import re
+import pandas as pd
 from typing import List, Dict, Tuple, Optional, Union # Added Union
 
-def convert_llm_output_to_doccano(input_data: Union[str, List[Dict]], output_file: str) -> Dict[str, int]: # Renamed function
+def convert_llm_output_to_doccano(input_data: Union[str, List[Dict]]) -> pd.DataFrame:
     """
-    Convert LLM raw output format or a list of dictionaries to Doccano training format.
+    Convert LLM raw output format or a list of dictionaries to Doccano training format as a DataFrame.
     
     Args:
         input_data: Path to the LLM raw JSONL file or a list of dictionaries
-        output_file: Path to save the converted Doccano format JSONL file
     
     Returns:
-        Dictionary with conversion statistics:
-        - total_samples: Total number of samples processed
-        - causal_samples: Number of samples with causal relations
-        - non_causal_samples: Number of non-causal samples
-        - error_samples: Number of samples with parsing errors
-        - entity_count: Total entities created
-        - relation_count: Total relations created
+        DataFrame with columns: id, text, entities, relations, Comments
+        Each row represents one sample in the exact format as the expert CSV files.
+        Entities and relations are JSON strings, Comments is always an empty list.
     """
     stats = {
         'total_samples': 0,
@@ -122,13 +119,23 @@ def convert_llm_output_to_doccano(input_data: Union[str, List[Dict]], output_fil
             stats['non_causal_samples'] += 1
             converted_samples.append(default_sample)
     
-    # Write all converted samples to output file
-    print(f"Writing {len(converted_samples)} samples to output file...")
-    with open(output_file, 'w', encoding='utf-8') as f:
-        for sample in converted_samples:
-            f.write(json.dumps(sample) + '\n')
+    # Convert to DataFrame with the exact CSV format
+    print(f"Converting {len(converted_samples)} samples to DataFrame...")
     
-    # Print conversion statistics
+    # Prepare DataFrame data
+    df_data = []
+    for sample in converted_samples:
+        df_data.append({
+            'id': sample['id'],
+            'text': sample['text'],
+            'entities': json.dumps(sample['entities']),  # Convert to JSON string
+            'relations': json.dumps(sample['relations']),  # Convert to JSON string
+            'Comments': json.dumps(sample['Comments'])  # Convert to JSON string (always [])
+        })
+    
+    df = pd.DataFrame(df_data)
+    
+    # Print conversion statistics (instead of returning)
     print(f"\n{'='*60}")
     print("CONVERSION COMPLETED SUCCESSFULLY")
     print(f"{'='*60}")
@@ -138,10 +145,10 @@ def convert_llm_output_to_doccano(input_data: Union[str, List[Dict]], output_fil
     print(f"Error samples: {stats['error_samples']} ({stats['error_samples']/stats['total_samples']*100:.1f}%)")
     print(f"Total entities created: {stats['entity_count']}")
     print(f"Total relations created: {stats['relation_count']}")
-    print(f"Output saved to: {output_file}")
+    print(f"DataFrame shape: {df.shape}")
     print(f"{'='*60}")
     
-    return stats
+    return df
 
 def create_default_sample(sample_id: int, stats: Dict) -> Dict:
     """Create a default non-causal sample for error cases."""
@@ -384,18 +391,20 @@ def find_span_in_text(text: str, span: str) -> int:
 # Tutorial: How to Use the LLM to Doccano Format Converter
 # ======================================================
 """
-This script provides a function to convert LLM output or model predictions into Doccano format for annotation or further processing. Below are several usage examples:
+This script provides a function to convert LLM output or model predictions into Doccano format as a pandas DataFrame. Below are several usage examples:
 
-1. Convert a JSONL file of LLM output to Doccano format:
+1. Convert a JSONL file of LLM output to Doccano DataFrame:
 
     from llm2doccano import convert_llm_output_to_doccano
     
     input_file = "path/to/llm_output.jsonl"
-    output_file = "path/to/llm_output_doccano.jsonl"
-    stats = convert_llm_output_to_doccano(input_file, output_file)
-    print(f"Converted {stats['total_samples']} samples.")
+    df = convert_llm_output_to_doccano(input_file)
+    print(f"DataFrame shape: {df.shape}")
+    
+    # Save to CSV if needed
+    df.to_csv("path/to/output.csv", index=False)
 
-2. Convert a list of dictionaries (in-memory data) to Doccano format:
+2. Convert a list of dictionaries (in-memory data) to Doccano DataFrame:
 
     from llm2doccano import convert_llm_output_to_doccano
     
@@ -403,19 +412,20 @@ This script provides a function to convert LLM output or model predictions into 
         {"text": "Example sentence 1;;", "causal": True, "relations": [{"cause": "A", "effect": "B", "type": "Rel_CE"}]},
         {"text": "Example sentence 2;;", "causal": False, "relations": []}
     ]
-    output_file = "path/to/list_input_doccano.jsonl"
-    stats = convert_llm_output_to_doccano(sample_list, output_file)
-    print(f"Converted {stats['total_samples']} samples.")
+    df = convert_llm_output_to_doccano(sample_list)
+    print(f"DataFrame shape: {df.shape}")
 
-3. Convert the resulting Doccano JSONL to CSV (optional):
+3. The DataFrame has the exact same format as expert CSV files:
 
-    import pandas as pd
-    df = pd.read_json(output_file, lines=True)
-    df.to_csv(output_file.replace('.jsonl', '.csv'), index=False)
-    print(f"Successfully converted {output_file} to CSV.")
+    - id: Sample ID (integer)
+    - text: Text content ending with ';;'
+    - entities: JSON string of entity list
+    - relations: JSON string of relation list  
+    - Comments: JSON string of empty list []
 
 Notes:
 - The converter preserves the number of samples and handles malformed or non-causal samples robustly.
 - Dual-role entities (spans that are both cause and effect) are handled as separate entities.
-- See the function docstring for details on statistics returned.
+- Statistics are printed to console instead of being returned.
+- The returned DataFrame can be directly saved as CSV or used for further processing.
 """

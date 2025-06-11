@@ -234,9 +234,29 @@ def _task3(
 
 
 # Driver evaluate function unchanged
-def evaluate(gold_path, pred_path, scenario='A', label_map=None, penalise_orphans=False):
-    gold = load_jsonl_list(gold_path)
-    pred = load_jsonl_list(pred_path)
+def evaluate(gold_df, pred_df, scenario='A', label_map=None, penalise_orphans=False):
+    """
+    Evaluate using two DataFrames (gold and pred), each with columns:
+    - 'text': document text
+    - 'labels'/'entities'/'spans': entity annotations
+    - 'relations'/'links': relation annotations
+    """
+    gold = []
+    pred = []
+    for idx, row in gold_df.iterrows():
+        did = str(row.get("id") or row.get("pk") or row.get("doc_id") or row.get("document_id") or idx)
+        gold.append({
+            "text": row.get("text") or row.get("content") or "",
+            "entities": _parse_ents(row, did),
+            "relations": _parse_rels(row)
+        })
+    for idx, row in pred_df.iterrows():
+        did = str(row.get("id") or row.get("pk") or row.get("doc_id") or row.get("document_id") or idx)
+        pred.append({
+            "text": row.get("text") or row.get("content") or "",
+            "entities": _parse_ents(row, did),
+            "relations": _parse_rels(row)
+        })
 
     if len(gold) != len(pred):
         raise ValueError("Length mismatch")
