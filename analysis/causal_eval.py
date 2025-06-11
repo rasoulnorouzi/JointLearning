@@ -246,10 +246,44 @@ def evaluate(gold_path, pred_path, scenario='A', label_map=None, penalise_orphan
     return {
         "Task1": _task1(gold, pred),
         "Task2": _task2(gold, pred, scenario),
+        "Task2_macro": macro_average_task2(_task2(gold, pred, scenario)),
         "Task3": _task3(gold, pred, scenario,
                         label_map=label_map,
-                        penalise_orphans=penalise_orphans)
+                        penalise_orphans=penalise_orphans),
+        "Total_Macro": total_macro_average(
+            _task1(gold, pred),
+            macro_average_task2(_task2(gold, pred, scenario)),
+            _task3(gold, pred, scenario,
+                   label_map=label_map,
+                   penalise_orphans=penalise_orphans)
+        )
     }
+
+
+def macro_average_task2(task2_result):
+    """
+    Compute macro average for Task 2 (cause/effect).
+    """
+    keys = ["Precision", "Recall", "F1"]
+    macro = {}
+    for k in keys:
+        macro[k] = (task2_result["cause"][k] + task2_result["effect"][k]) / 2
+    macro["TP_precision"] = task2_result["cause"]["TP_precision"] + task2_result["effect"]["TP_precision"]
+    macro["TP_recall"] = task2_result["cause"]["TP_recall"] + task2_result["effect"]["TP_recall"]
+    macro["FP"] = task2_result["cause"]["FP"] + task2_result["effect"]["FP"]
+    macro["FN"] = task2_result["cause"]["FN"] + task2_result["effect"]["FN"]
+    return macro
+
+
+def total_macro_average(task1, task2_macro, task3):
+    """
+    Compute macro average across Task1, Task2_macro, and Task3.
+    """
+    keys = ["Precision", "Recall", "F1"]
+    macro = {}
+    for k in keys:
+        macro[k] = (task1[k] + task2_macro[k] + task3[k]) / 3
+    return macro
 
 
 def display_results(results, scenario):

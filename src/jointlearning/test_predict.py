@@ -63,8 +63,8 @@ def main():
     results = model.predict(
         test_sents,
         tokenizer=TOKENIZER,
-        rel_mode="auto",           # or "auto"
-        rel_threshold=0.5,         # adjust as needed
+        rel_mode="neural_only",           # or "auto"
+        rel_threshold=0.8,         # adjust as needed
         cause_decision="span_only" # or "cls_only", "span_only"
     )
 
