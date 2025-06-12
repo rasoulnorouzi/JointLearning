@@ -235,39 +235,14 @@ def _task3(
 
 
 
-# Driver evaluate function unchanged
-<<<<<<< Updated upstream
+# Driver evaluate function
 def evaluate(gold_df, pred_df, scenario='A', label_map=None, penalise_orphans=False):
-    """
-    Evaluate using two DataFrames (gold and pred), each with columns:
-    - 'text': document text
-    - 'labels'/'entities'/'spans': entity annotations
-    - 'relations'/'links': relation annotations
-    """
-    gold = []
-    pred = []
-    for idx, row in gold_df.iterrows():
-        did = str(row.get("id") or row.get("pk") or row.get("doc_id") or row.get("document_id") or idx)
-        gold.append({
-            "text": row.get("text") or row.get("content") or "",
-            "entities": _parse_ents(row, did),
-            "relations": _parse_rels(row)
-        })
-    for idx, row in pred_df.iterrows():
-        did = str(row.get("id") or row.get("pk") or row.get("doc_id") or row.get("document_id") or idx)
-        pred.append({
-            "text": row.get("text") or row.get("content") or "",
-            "entities": _parse_ents(row, did),
-            "relations": _parse_rels(row)
-        })
-=======
-def evaluate(gold_data, pred_data, scenario='A', label_map=None, penalise_orphans=False):
     """
     Evaluate causal extraction performance.
     
     Args:
-        gold_data: Either a path to a JSONL file or a pandas DataFrame with the gold standard data
-        pred_data: Either a path to a JSONL file or a pandas DataFrame with the prediction data
+        gold_df: Pandas DataFrame with the gold standard data
+        pred_df: Pandas DataFrame with the prediction data
         scenario: Evaluation scenario ('A' or 'B')
         label_map: Optional mapping for normalizing relation labels
         penalise_orphans: Whether to penalize relations without matching entities
@@ -275,10 +250,113 @@ def evaluate(gold_data, pred_data, scenario='A', label_map=None, penalise_orphan
     Returns:
         Dictionary with evaluation results for all tasks
     """
-    # Handle input data - convert pandas DataFrame to the expected format if needed
-    gold = _process_input_data(gold_data)
-    pred = _process_input_data(pred_data)
->>>>>>> Stashed changes
+    # Process DataFrames to the expected format for evaluation
+    gold = []
+    pred = []
+    
+    # Process gold data
+    for _, row in gold_df.iterrows():
+        did = str(row.get('id', len(gold)))
+        entities = []
+        relations = []
+        
+        # Process entities
+        if 'entities' in row and row['entities']:
+            try:
+                # Handle case where entities is a string representation of a list/dict
+                if isinstance(row['entities'], str):
+                    # First try json.loads
+                    try:
+                        entities_data = json.loads(row['entities'])
+                    except json.JSONDecodeError:
+                        # If json.loads fails, try ast.literal_eval which can handle single quotes
+                        entities_data = ast.literal_eval(row['entities'])
+                else:
+                    entities_data = row['entities']
+                
+                # Create a temporary dict to mimic the format expected by _parse_ents
+                temp_dict = {"labels": entities_data if isinstance(entities_data, list) else []}
+                entities = _parse_ents(temp_dict, did)
+            except Exception as e:
+                print(f"Error processing entities for row {did}: {e}")
+        
+        # Process relations
+        if 'relations' in row and row['relations']:
+            try:
+                # Handle case where relations is a string representation of a list/dict
+                if isinstance(row['relations'], str):
+                    # First try json.loads
+                    try:
+                        relations_data = json.loads(row['relations'])
+                    except json.JSONDecodeError:
+                        # If json.loads fails, try ast.literal_eval which can handle single quotes
+                        relations_data = ast.literal_eval(row['relations'])
+                else:
+                    relations_data = row['relations']
+                
+                # Create a temporary dict to mimic the format expected by _parse_rels
+                temp_dict = {"relations": relations_data if isinstance(relations_data, list) else []}
+                relations = _parse_rels(temp_dict)
+            except Exception as e:
+                print(f"Error processing relations for row {did}: {e}")
+        
+        gold.append({
+            "text": str(row.get('text', "")),
+            "entities": entities,
+            "relations": relations
+        })
+    
+    # Process prediction data
+    for _, row in pred_df.iterrows():
+        did = str(row.get('id', len(pred)))
+        entities = []
+        relations = []
+        
+        # Process entities
+        if 'entities' in row and row['entities']:
+            try:
+                # Handle case where entities is a string representation of a list/dict
+                if isinstance(row['entities'], str):
+                    # First try json.loads
+                    try:
+                        entities_data = json.loads(row['entities'])
+                    except json.JSONDecodeError:
+                        # If json.loads fails, try ast.literal_eval which can handle single quotes
+                        entities_data = ast.literal_eval(row['entities'])
+                else:
+                    entities_data = row['entities']
+                
+                # Create a temporary dict to mimic the format expected by _parse_ents
+                temp_dict = {"labels": entities_data if isinstance(entities_data, list) else []}
+                entities = _parse_ents(temp_dict, did)
+            except Exception as e:
+                print(f"Error processing entities for row {did}: {e}")
+        
+        # Process relations
+        if 'relations' in row and row['relations']:
+            try:
+                # Handle case where relations is a string representation of a list/dict
+                if isinstance(row['relations'], str):
+                    # First try json.loads
+                    try:
+                        relations_data = json.loads(row['relations'])
+                    except json.JSONDecodeError:
+                        # If json.loads fails, try ast.literal_eval which can handle single quotes
+                        relations_data = ast.literal_eval(row['relations'])
+                else:
+                    relations_data = row['relations']
+                
+                # Create a temporary dict to mimic the format expected by _parse_rels
+                temp_dict = {"relations": relations_data if isinstance(relations_data, list) else []}
+                relations = _parse_rels(temp_dict)
+            except Exception as e:
+                print(f"Error processing relations for row {did}: {e}")
+        
+        pred.append({
+            "text": str(row.get('text', "")),
+            "entities": entities,
+            "relations": relations
+        })
 
     if len(gold) != len(pred):
         raise ValueError("Length mismatch")
@@ -298,84 +376,7 @@ def evaluate(gold_data, pred_data, scenario='A', label_map=None, penalise_orphan
             _task3(gold, pred, scenario,
                    label_map=label_map,
                    penalise_orphans=penalise_orphans)
-        )
-    }
-
-
-def _process_input_data(data):
-    """
-    Process input data, which can be either a file path or a pandas DataFrame.
-    
-    Args:
-        data: Either a file path (str) or a pandas DataFrame
-        
-    Returns:
-        List of dictionaries in the format expected by evaluation functions
-    """
-    import pandas as pd
-    import ast
-    
-    if isinstance(data, str):
-        # If it's a string, assume it's a file path
-        return load_jsonl_list(data)
-    elif isinstance(data, pd.DataFrame):
-        # Convert DataFrame to the expected format
-        docs = []
-        for _, row in data.iterrows():
-            did = str(row.get('id', len(docs)))
-            entities = []
-            relations = []
-            
-            # Process entities
-            if 'entities' in row and row['entities']:
-                try:
-                    # Handle case where entities is a string representation of a list/dict
-                    if isinstance(row['entities'], str):
-                        # First try json.loads
-                        try:
-                            import json
-                            entities_data = json.loads(row['entities'])
-                        except json.JSONDecodeError:
-                            # If json.loads fails, try ast.literal_eval which can handle single quotes
-                            entities_data = ast.literal_eval(row['entities'])
-                    else:
-                        entities_data = row['entities']
-                    
-                    # Create a temporary dict to mimic the format expected by _parse_ents
-                    temp_dict = {"labels": entities_data if isinstance(entities_data, list) else []}
-                    entities = _parse_ents(temp_dict, did)
-                except Exception as e:
-                    print(f"Error processing entities for row {did}: {e}")
-            
-            # Process relations
-            if 'relations' in row and row['relations']:
-                try:
-                    # Handle case where relations is a string representation of a list/dict
-                    if isinstance(row['relations'], str):
-                        # First try json.loads
-                        try:
-                            import json
-                            relations_data = json.loads(row['relations'])
-                        except json.JSONDecodeError:
-                            # If json.loads fails, try ast.literal_eval which can handle single quotes
-                            relations_data = ast.literal_eval(row['relations'])
-                    else:
-                        relations_data = row['relations']
-                    
-                    # Create a temporary dict to mimic the format expected by _parse_rels
-                    temp_dict = {"relations": relations_data if isinstance(relations_data, list) else []}
-                    relations = _parse_rels(temp_dict)
-                except Exception as e:
-                    print(f"Error processing relations for row {did}: {e}")
-            
-            docs.append({
-                "text": str(row.get('text', "")),
-                "entities": entities,
-                "relations": relations
-            })
-        return docs
-    else:
-        raise TypeError("Input data must be either a file path (str) or a pandas DataFrame")
+        )    }
 
 
 def macro_average_task2(task2_result):
