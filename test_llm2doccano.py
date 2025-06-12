@@ -21,10 +21,10 @@ def main():
     print("\nFirst few rows of the DataFrame:")
     print(df.head(2))
     
-    # Example 2: Convert and save to file
+    # Example 2: Save DataFrame to JSONL
     output_file = "datasets/pseudo_annotate_data/llama3_8b_processed_new.jsonl"
-    print(f"\nConverting JSONL file and saving to {output_file}...")
-    df = convert_llm_output_to_doccano(input_file, output_file)
+    print(f"\nSaving DataFrame to JSONL: {output_file}...")
+    df.to_json(output_file, orient='records', lines=True)
     
     # Example 3: Save DataFrame to CSV
     csv_output = "datasets/pseudo_annotate_data/llama3_8b_processed_new.csv"
