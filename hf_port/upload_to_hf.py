@@ -18,7 +18,7 @@ api.upload_folder(
     folder_path=LOCAL_FOLDER,
     repo_id=REPO_ID,
     repo_type="model",
-    commit_message="resolving cause detection issue, now non cause return empty list",
+    commit_message="adding neural only mode for relation extraction",
 )
 
 print("\nUpload complete!")

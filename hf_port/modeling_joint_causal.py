@@ -245,8 +245,8 @@ class JointCausalModel(PreTrainedModel):
         sents: List[str],
         tokenizer=None,
         *,
-        rel_mode: str = "auto",
-        rel_threshold: float = 0.55,
+        rel_mode: str = "neural_only",
+        rel_threshold: float = 0.8,
         cause_decision: str = "cls+span",
     ) -> List[dict]:
         """End‑to‑end inference for causal sentence extraction (batched).
@@ -324,8 +324,7 @@ class JointCausalModel(PreTrainedModel):
                 has_ce_spans = len(ce_spans) > 0
 
                 if has_ce_spans and not (has_pure_causes or has_pure_effects):
-                    # Skip relation extraction if only combined spans exist
-                    pass
+                    pass  # Skip relation extraction if only combined spans exist
                 elif rel_mode == "auto" and (len(cause_spans) == 1 or len(effect_spans) == 1):
                     # Simplified relation extraction for single spans
                     if len(cause_spans) == 1:
@@ -338,6 +337,35 @@ class JointCausalModel(PreTrainedModel):
                             if (c.text.lower() != effect_spans[0].text.lower() or 
                                 (c.role == "CE" and effect_spans[0].role != "CE")):
                                 rels.append({"cause": c.text, "effect": effect_spans[0].text, "type": "Rel_CE"})
+                elif rel_mode == "neural_only":
+                    # Always use the relation head for all valid pairs
+                    pair_meta = []
+                    for c in cause_spans:
+                        for e in effect_spans:
+                            if (not (c.start_tok == e.start_tok and c.end_tok == e.end_tok) or
+                                (c.role == "CE" and e.role in {"C", "E"}) or
+                                (c.role in {"C", "E"} and e.role == "CE")):
+                                pair_meta.append((c, e))
+                    if pair_meta:
+                        # Prepare tensors for this sentence only
+                        pair_batch = torch.zeros(len(pair_meta), dtype=torch.long, device=device)
+                        cause_starts = torch.tensor([c.start_tok for c, _ in pair_meta], device=device)
+                        cause_ends = torch.tensor([c.end_tok for c, _ in pair_meta], device=device)
+                        effect_starts = torch.tensor([e.start_tok for _, e in pair_meta], device=device)
+                        effect_ends = torch.tensor([e.end_tok for _, e in pair_meta], device=device)
+                        rel_logits = self(
+                            input_ids=input_ids.unsqueeze(0),
+                            attention_mask=attention_mask_batch[i][:seq_len].unsqueeze(0),
+                            pair_batch=pair_batch,
+                            cause_starts=cause_starts,
+                            cause_ends=cause_ends,
+                            effect_starts=effect_starts,
+                            effect_ends=effect_ends,
+                        )["rel_logits"]
+                        probs = torch.softmax(rel_logits, dim=-1)[:, 1].tolist()  # Extract probabilities for relation type
+                        for (c, e), p in zip(pair_meta, probs):
+                            if p >= rel_threshold and c.text.lower() != e.text.lower():
+                                rels.append({"cause": c.text, "effect": e.text, "type": "Rel_CE"})
                 else:
                     # Full relation extraction for multiple spans
                     pair_meta = []
