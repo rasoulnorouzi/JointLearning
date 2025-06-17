@@ -1,7 +1,5 @@
 from collections import Counter, defaultdict
 from typing import List, Dict, Tuple, Union
-import pathlib
-import json
 import pandas as pd
 import ast
 
@@ -157,7 +155,7 @@ def _task2(gold: list, pred: list, scenario: str, eval_mode: str) -> dict:
     """Task 2: Cause/Effect Span Extraction."""
     counts = {lbl: {'TP': 0, 'FP': 0, 'FN': 0} for lbl in ('cause', 'effect')}
     for g_doc, p_doc in zip(gold, pred):
-        if scenario.upper() == 'B' and not (
+        if scenario.lower() == 'filtered_causal' and not (
             any(lbl in {'cause', 'effect'} for *_, lbl, _ in g_doc['entities']) and
             any(lbl in {'cause', 'effect'} for *_, lbl, _ in p_doc['entities'])
         ): continue
@@ -188,7 +186,7 @@ def _task3(gold_docs: list, pred_docs: list, scenario: str, eval_mode: str, labe
     norm = (lambda lbl: label_map.get(lbl, lbl)) if label_map else (lambda lbl: lbl)
 
     for g_doc, p_doc in zip(gold_docs, pred_docs):
-        if scenario.upper() == 'B' and not (
+        if scenario.lower() == 'filtered_causal' and not (
             any(lbl in {'cause', 'effect'} for *_, lbl, _ in g_doc['entities']) and
             any(lbl in {'cause', 'effect'} for *_, lbl, _ in p_doc['entities'])
         ): continue
@@ -221,13 +219,13 @@ def _task3(gold_docs: list, pred_docs: list, scenario: str, eval_mode: str, labe
 
 # --- Main Driver and Display Functions ---
 
-def evaluate(gold_df, pred_df, scenario='A', label_map=None, eval_mode='discovery'):
+def evaluate(gold_df, pred_df, scenario='all_documents', label_map=None, eval_mode='discovery'):
     """
     Evaluate causal extraction performance.
     
     Args:
         gold_df, pred_df: Pandas DataFrames with gold and prediction data.
-        scenario: Evaluation scenario ('A' or 'B').
+        scenario: Evaluation scenario ('all_documents' or 'filtered_causal').
         label_map: Optional mapping for normalizing relation labels.
         eval_mode (str): Mode for Task 2/3 evaluation.
                          'discovery' (default): Ignores extra overlapping items.
@@ -301,28 +299,23 @@ def display_results(results, title_prefix=""):
     print(f"\n{border}\n")
 
 def main():
-    try:
-        gold_df = pd.read_csv(r"C:\\Users\\norouzin\\Desktop\\JointLearning\\datasets\\expert_multi_task_data\\test.csv")
-        pred_df = pd.read_csv(r"C:\\Users\\norouzin\\Desktop\\JointLearning\\predictions\\expert_bert_softmax_cls+span_doccano.csv")
-    except FileNotFoundError:
-        print("Example files not found. Creating dummy data for demonstration.")
-        gold_df = pd.DataFrame([{'id': 1, 'text': 'Heat causes ice to melt.', 'entities': '[[12, 15, "effect", "E1"], [5, 9, "cause", "C1"]]', 'relations': '[["C1", "E1", "causal"]]',}])
-        pred_df = pd.DataFrame([{'id': 1, 'text': 'Heat causes ice to melt.', 'entities': '[[12, 18, "effect", "E2"], [5, 9, "cause", "C2"]]', 'relations': '[["C2", "E2", "causal"]]',}])
+    gold_df = pd.read_csv(r"C:\\Users\\norouzin\\Desktop\\JointLearning\\datasets\\expert_multi_task_data\\test.csv")
+    pred_df = pd.read_csv(r"C:\\Users\\norouzin\\Desktop\\JointLearning\\predictions\\expert_bert_softmax_cls+span_doccano.csv")
 
     print("\n" + "#" * 15 + " Running in 'discovery' mode (ignoring extra overlaps) " + "#" * 15)
-    results_discovery = evaluate(gold_df, pred_df, scenario='A', eval_mode='discovery')
-    display_results(results_discovery, title_prefix="Scenario A - 'discovery' mode")
+    results_discovery = evaluate(gold_df, pred_df, scenario='all_documents', eval_mode='discovery')
+    display_results(results_discovery, title_prefix="All Documents - 'discovery' mode")
 
     print("\n" + "#" * 15 + " Running in 'coverage' mode (all overlaps are TPs) " + "#" * 15)
-    results_coverage = evaluate(gold_df, pred_df, scenario='A', eval_mode='coverage')
-    display_results(results_coverage, title_prefix="Scenario A - 'coverage' mode")
+    results_coverage = evaluate(gold_df, pred_df, scenario='all_documents', eval_mode='coverage')
+    display_results(results_coverage, title_prefix="All Documents - 'coverage' mode")
 
-    print("\n" + "#" * 15 + " Running in 'discovery' mode for Scenario B " + "#" * 15)
-    results_scenario_b = evaluate(gold_df, pred_df, scenario='B', eval_mode='discovery')
-    display_results(results_scenario_b, title_prefix="Scenario B - 'discovery' mode")
-    print("\n" + "#" * 15 + " Running in 'coverage' mode for Scenario B " + "#" * 15)
-    results_scenario_b_coverage = evaluate(gold_df, pred_df, scenario='B', eval_mode='coverage')
-    display_results(results_scenario_b_coverage, title_prefix="Scenario B - 'coverage' mode")
+    print("\n" + "#" * 15 + " Running in 'discovery' mode for Filtered Causal " + "#" * 15)
+    results_scenario_b = evaluate(gold_df, pred_df, scenario='filtered_causal', eval_mode='discovery')
+    display_results(results_scenario_b, title_prefix="Filtered Causal - 'discovery' mode")
+    print("\n" + "#" * 15 + " Running in 'coverage' mode for Filtered Causal " + "#" * 15)
+    results_scenario_b_coverage = evaluate(gold_df, pred_df, scenario='filtered_causal', eval_mode='coverage')
+    display_results(results_scenario_b_coverage, title_prefix="Filtered Causal - 'coverage' mode")
     print("\n" + "#" * 15 + " Evaluation completed! " + "#" * 15)
 
 if __name__ == "__main__":
