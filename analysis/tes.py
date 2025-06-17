@@ -1,9 +1,3 @@
-#!/usr/bin/env python3
-"""
-Quick test runner for the evaluation pipeline
-"""
-
-from evaluation_pipeline import EvaluationPipeline
 
 def main():
     # Model configurations - UPDATE THESE PATHS TO YOUR ACTUAL MODEL PATHS
@@ -25,17 +19,7 @@ def main():
     # thresholds = [0.8, 0.9]
     # causal_classification_modes = ['span_only']
     
-    # Create and run pipeline
-    pipeline = EvaluationPipeline(
-        models=models,
-        thresholds=thresholds,
-        causal_classification_modes=causal_classification_modes,
-        batch_size=batch_size,
-        scenarios=scenarios,
-        eval_modes=eval_modes
-    )
-    
-    pipeline.run_evaluation()
+
 
 if __name__ == "__main__":
     main()

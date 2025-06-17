@@ -122,6 +122,11 @@ def convert_llm_output_to_doccano(input_data: Union[str, List[Dict]]) -> pd.Data
     # Convert samples to a pandas DataFrame
     df = pd.DataFrame(converted_samples)
     
+    # Convert entities and relations to string format for compatibility with evaluation scripts
+    # This ensures consistency with test data format which has string representations
+    df['entities'] = df['entities'].apply(str)
+    df['relations'] = df['relations'].apply(str)
+    
     # Print conversion statistics
     print(f"\n{'='*60}")
     print("CONVERSION COMPLETED SUCCESSFULLY")
