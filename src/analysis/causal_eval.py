@@ -298,25 +298,25 @@ def display_results(results, title_prefix=""):
                     print(f"  {key:<12}: {value: >8.4f}" if isinstance(value, float) else f"  {key:<12}: {value: >8}")
     print(f"\n{border}\n")
 
-def main():
-    gold_df = pd.read_csv(r"C:\\Users\\norouzin\\Desktop\\JointLearning\\datasets\\expert_multi_task_data\\test.csv")
-    pred_df = pd.read_csv(r"C:\\Users\\norouzin\\Desktop\\JointLearning\\predictions\\expert_bert_softmax_cls+span_doccano.csv")
+# def main():
+#     gold_df = pd.read_csv(r"C:\\Users\\norouzin\\Desktop\\JointLearning\\datasets\\expert_multi_task_data\\test.csv")
+#     pred_df = pd.read_csv(r"C:\\Users\\norouzin\\Desktop\\JointLearning\\predictions\\expert_bert_softmax_cls+span_doccano.csv")
 
-    print("\n" + "#" * 15 + " Running in 'discovery' mode (ignoring extra overlaps) " + "#" * 15)
-    results_discovery = evaluate(gold_df, pred_df, scenario='all_documents', eval_mode='discovery')
-    display_results(results_discovery, title_prefix="All Documents - 'discovery' mode")
+#     print("\n" + "#" * 15 + " Running in 'discovery' mode (ignoring extra overlaps) " + "#" * 15)
+#     results_discovery = evaluate(gold_df, pred_df, scenario='all_documents', eval_mode='discovery')
+#     display_results(results_discovery, title_prefix="All Documents - 'discovery' mode")
 
-    print("\n" + "#" * 15 + " Running in 'coverage' mode (all overlaps are TPs) " + "#" * 15)
-    results_coverage = evaluate(gold_df, pred_df, scenario='all_documents', eval_mode='coverage')
-    display_results(results_coverage, title_prefix="All Documents - 'coverage' mode")
+#     print("\n" + "#" * 15 + " Running in 'coverage' mode (all overlaps are TPs) " + "#" * 15)
+#     results_coverage = evaluate(gold_df, pred_df, scenario='all_documents', eval_mode='coverage')
+#     display_results(results_coverage, title_prefix="All Documents - 'coverage' mode")
 
-    print("\n" + "#" * 15 + " Running in 'discovery' mode for Filtered Causal " + "#" * 15)
-    results_scenario_b = evaluate(gold_df, pred_df, scenario='filtered_causal', eval_mode='discovery')
-    display_results(results_scenario_b, title_prefix="Filtered Causal - 'discovery' mode")
-    print("\n" + "#" * 15 + " Running in 'coverage' mode for Filtered Causal " + "#" * 15)
-    results_scenario_b_coverage = evaluate(gold_df, pred_df, scenario='filtered_causal', eval_mode='coverage')
-    display_results(results_scenario_b_coverage, title_prefix="Filtered Causal - 'coverage' mode")
-    print("\n" + "#" * 15 + " Evaluation completed! " + "#" * 15)
+#     print("\n" + "#" * 15 + " Running in 'discovery' mode for Filtered Causal " + "#" * 15)
+#     results_scenario_b = evaluate(gold_df, pred_df, scenario='filtered_causal', eval_mode='discovery')
+#     display_results(results_scenario_b, title_prefix="Filtered Causal - 'discovery' mode")
+#     print("\n" + "#" * 15 + " Running in 'coverage' mode for Filtered Causal " + "#" * 15)
+#     results_scenario_b_coverage = evaluate(gold_df, pred_df, scenario='filtered_causal', eval_mode='coverage')
+#     display_results(results_scenario_b_coverage, title_prefix="Filtered Causal - 'coverage' mode")
+#     print("\n" + "#" * 15 + " Evaluation completed! " + "#" * 15)
 
-if __name__ == "__main__":
-    main()
+# if __name__ == "__main__":
+#     main()
