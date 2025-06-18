@@ -1,39 +1,18 @@
 from collections import Counter, defaultdict
 from typing import List, Dict, Tuple, Union
-import pathlib
-import json
 import pandas as pd
 import ast
 
+# --- Type Definitions ---
 Span = Tuple[int,int]
 Entity = Tuple[int,int,str,str]
-Relation = Tuple[str,str,str]
+# A relation is represented by its source span, target span, and label
+Relation = Tuple[Span, Span, str] 
 
+# --- Core Helper Functions ---
 def intervals_overlap(a: Span, b: Span) -> bool:
-    """
-    Check if two span intervals overlap.
-    """
+    """Check if two span intervals overlap."""
     return max(a[0], b[0]) < min(a[1], b[1])
-
-# MODIFIED pair_spans for per-gold (recall) and per-pred (precision) matching
-def pair_spans(g: List[Span], p: List[Span]) -> Tuple[int, int, int, int]:
-    """
-    Match spans under per-gold/per-pred policy:
-    - recall_tp: number of gold spans overlapped by any predicted span
-    - precision_tp: number of predicted spans overlapped by any gold span
-    - fp: false positives = predicted spans with no overlap
-    - fn: false negatives = gold spans with no overlap
-    Returns:
-        recall_tp, fp, fn, precision_tp
-    """
-    # recall: count gold spans covered by any prediction
-    recall_tp = sum(1 for gr in g if any(intervals_overlap(gr, pr) for pr in p))
-    fn = len(g) - recall_tp
-    # precision: count predicted spans that overlap any gold span
-    precision_tp = sum(1 for pr in p if any(intervals_overlap(pr, gr) for gr in g))
-    fp = len(p) - precision_tp
-    return recall_tp, fp, fn, precision_tp
-
 
 def _parse_ents(raw, doc_id):
     out = []
@@ -43,18 +22,13 @@ def _parse_ents(raw, doc_id):
             lbl = ent.get("label") or ent.get("type") or ""
             eid = str(ent.get("id") or ent.get("entity_id") or f"{doc_id}:{s}-{e}")
         else:
-            if len(ent) == 3:
-                s, e, lbl = ent
-            elif len(ent) == 4:
-                _, s, e, lbl = ent
-            else:
-                continue
+            if len(ent) == 3: s, e, lbl = ent
+            elif len(ent) == 4: _, s, e, lbl = ent
+            else: continue
             eid = f"{doc_id}:{s}-{e}"
-        if s is None or e is None:
-            continue
+        if s is None or e is None: continue
         out.append((int(s), int(e), str(lbl).lower(), eid))
     return out
-
 
 def _parse_rels(raw):
     out = []
@@ -63,42 +37,21 @@ def _parse_rels(raw):
             src = str(rel.get("from_id") or rel.get("src")); tgt = str(rel.get("to_id") or rel.get("dst"))
             pol = str(rel.get("type") or rel.get("label") or rel.get("relation")).lower()
         else:
-            if len(rel) < 3:
-                continue
+            if len(rel) < 3: continue
             src, tgt, pol = rel[:3]; pol = str(pol).lower()
         out.append((src, tgt, pol))
     return out
 
-
-def load_jsonl_list(path) -> List[Dict]:
-    docs = []
-    with pathlib.Path(path).open("r", encoding="utf-8") as fh:
-        for line in fh:
-            if not line.strip():
-                continue
-            raw = json.loads(line)
-            did = str(raw.get("id") or raw.get("pk") or raw.get("doc_id") or raw.get("document_id") or len(docs))
-            docs.append({
-                "text": raw.get("text") or raw.get("content") or "",
-                "entities": _parse_ents(raw, did),
-                "relations": _parse_rels(raw)
-            })
-    return docs
-
-
+# --- Task 1: Document-level Classification ---
 def _task1(gold, pred):
     tp = fp = fn = tn = 0
     for g, p in zip(gold, pred):
         gc = any(l in {"cause", "effect"} for *_, l, _ in g["entities"])
         pc = any(l in {"cause", "effect"} for *_, l, _ in p["entities"])
-        if gc and pc:
-            tp += 1
-        elif gc and not pc:
-            fn += 1
-        elif not gc and pc:
-            fp += 1
-        else:
-            tn += 1
+        if gc and pc: tp += 1
+        elif gc and not pc: fn += 1
+        elif not gc and pc: fp += 1
+        else: tn += 1
     prec = tp / (tp + fp) if tp + fp else 0
     rec = tp / (tp + fn) if tp + fn else 0
     f1 = 2 * tp / (2 * tp + fp + fn) if tp else 0
@@ -107,358 +60,263 @@ def _task1(gold, pred):
             "Precision": prec, "Recall": rec, "F1": f1, "Accuracy": acc, "N": len(gold)}
 
 
-def _task2(gold, pred, scenario="A"):
-    counts = {lbl: {"recall_tp": 0, "precision_tp": 0, "FP": 0, "FN": 0} for lbl in ("cause", "effect")}
-    for g, p in zip(gold, pred):
-        gb = defaultdict(list); pb = defaultdict(list)
-        for s, e, l, _ in g["entities"]:
-            if l in {"cause", "effect"}:
-                gb[l].append((s, e))
-        for s, e, l, _ in p["entities"]:
-            if l in {"cause", "effect"}:
-                pb[l].append((s, e))
-        gc = bool(gb["cause"] or gb["effect"]); pc = bool(pb["cause"] or pb["effect"])
-        if scenario.upper() == "B" and not (gc and pc):
-            continue
-        for l in ("cause", "effect"):
-            recall_tp, fp, fn, precision_tp = pair_spans(gb[l], pb[l])
-            c = counts[l]
-            c["recall_tp"] += recall_tp
-            c["precision_tp"] += precision_tp
-            c["FP"] += fp
-            c["FN"] += fn
-    rep = {}
-    for l, c in counts.items():
-        prec = c["precision_tp"] / (c["precision_tp"] + c["FP"]) if c["precision_tp"] + c["FP"] else 0
-        rec = c["recall_tp"] / (c["recall_tp"] + c["FN"]) if c["recall_tp"] + c["FN"] else 0
-        f1 = 2 * prec * rec / (prec + rec) if prec + rec else 0
-        rep[l] = {
-            "Precision": prec,
-            "Recall": rec,
-            "F1": f1,
-            "TP_precision": c["precision_tp"],
-            "TP_recall": c["recall_tp"],
-            "FP": c["FP"],
-            "FN": c["FN"]
-        }
-    return rep
+# --- Unified Metric Calculation Helpers ---
 
-
-def _task3(
-        gold_docs,
-        pred_docs,
-        scenario="A",          # ← new
-        label_map=None,
-        penalise_orphans=False     # keep the flag you prefer
-):
-    """
-    Relation-classification metric.
-
-    scenario="A"  → score every document  
-    scenario="B"  → score *only* documents in which
-                    both gold **and** prediction contain
-                    at least one Cause or Effect entity
-                    (same filter used in Task 2).
-
-    Everything else (one-to-one greedy matching, FP/FN rules)
-    is unchanged.
-    """
-    def norm(lbl):
-        return label_map.get(lbl, lbl) if label_map else lbl
-
-    cnt = Counter()
-
-    for g_doc, p_doc in zip(gold_docs, pred_docs):
-
-        # --- scenario filter identical to Task 2 -------------
-        if scenario.upper() == "B":
-            gc = any(l in {"cause", "effect"} for _, _, l, _ in g_doc["entities"])
-            pc = any(l in {"cause", "effect"} for _, _, l, _ in p_doc["entities"])
-            if not (gc and pc):
-                continue     # skip this document entirely
-
-        # ---- entity maps ------------------------------------
-        g_ent = {eid: (s, e, lbl) for s, e, lbl, eid in g_doc["entities"]}
-        p_ent = {eid: (s, e, lbl) for s, e, lbl, eid in p_doc["entities"]}
-
-        # ---- collect Cause→Effect links ---------------------
-        gold_links = [((g_ent[s][0], g_ent[s][1]),
-                       (g_ent[t][0], g_ent[t][1]),
-                       norm(lbl))
-                      for s, t, lbl in g_doc["relations"]
-                      if s in g_ent and t in g_ent
-                      and g_ent[s][2] == "cause"
-                      and g_ent[t][2] == "effect"]
-
-        pred_links = [((p_ent[s][0], p_ent[s][1]),
-                       (p_ent[t][0], p_ent[t][1]),
-                       norm(lbl))
-                      for s, t, lbl in p_doc["relations"]
-                      if s in p_ent and t in p_ent
-                      and p_ent[s][2] == "cause"
-                      and p_ent[t][2] == "effect"]
-
-        used_pred = set()
-
-        # ---- gold-anchored greedy matching ------------------
-        for gs_c, gs_e, g_lab in gold_links:
-            hit = -1
-            for i_p, (ps_c, ps_e, _) in enumerate(pred_links):
-                if i_p in used_pred:
-                    continue
-                if intervals_overlap(gs_c, ps_c) and intervals_overlap(gs_e, ps_e):
-                    hit = i_p
+def calculate_span_metrics(golds: List[Span], preds: List[Span], mode: str) -> Tuple[int, int, int]:
+    """Calculates TP, FP, FN for spans based on the evaluation mode."""
+    if mode == 'discovery':
+        used_preds = set()
+        tp = 0
+        for g in golds:
+            for i, p in enumerate(preds):
+                if i in used_preds: continue
+                if intervals_overlap(g, p):
+                    tp += 1
+                    used_preds.add(i)
                     break
+        fn = len(golds) - tp
+        fp = sum(
+            1 for i, p in enumerate(preds)
+            if i not in used_preds and not any(intervals_overlap(p, g) for g in golds)
+        )
+        return tp, fp, fn
 
-            if hit == -1:
-                cnt["FN"] += 1
+    elif mode == 'coverage':
+        if not golds and not preds: return 0, 0, 0
+        if not preds: return 0, 0, len(golds)
+        if not golds: return 0, len(preds), 0
+
+        tp = sum(1 for p in preds if any(intervals_overlap(p, g) for g in golds))
+        fp = len(preds) - tp
+        fn = sum(1 for g in golds if not any(intervals_overlap(g, p) for p in preds))
+        return tp, fp, fn
+    else:
+        raise ValueError(f"Unknown evaluation mode: '{mode}'")
+
+def calculate_relation_metrics(golds: List[Relation], preds: List[Relation], mode: str) -> Tuple[int, int, int]:
+    """Calculates TP, FP, FN for relations based on the evaluation mode."""
+    if mode == 'discovery':
+        cnt = Counter()
+        used_pred = set()
+        for gs_c, gs_e, g_lab in golds:
+            hit = None
+            for i, (ps_c, ps_e, p_lab) in enumerate(preds):
+                if i in used_pred: continue
+                if intervals_overlap(gs_c, ps_c) and intervals_overlap(gs_e, ps_e):
+                    hit = i
+                    break
+            if hit is None:
+                cnt['FN'] += 1
             else:
                 used_pred.add(hit)
-                _, _, p_lab = pred_links[hit]
-                if p_lab == g_lab:
-                    cnt["TP"] += 1
-                else:
-                    cnt["FP"] += 1
+                _, _, p_lab = preds[hit]
+                if p_lab == g_lab: cnt['TP'] += 1
+                else: cnt['FP'] += 1; cnt['FN'] += 1
+        
+        for i, (ps_c, ps_e, _) in enumerate(preds):
+            if i in used_pred: continue
+            if not any(intervals_overlap(ps_c, gs_c) and intervals_overlap(ps_e, gs_e) for gs_c, gs_e, _ in golds):
+                cnt['FP'] += 1
+        return cnt['TP'], cnt['FP'], cnt['FN']
 
-        if penalise_orphans:
-            cnt["FP"] += len(pred_links) - len(used_pred)
+    elif mode == 'coverage':
+        tp = fp = fn = 0
+        # Calculate TP and FP from the perspective of predictions
+        for p_cause, p_effect, p_label in preds:
+            is_match = False
+            for g_cause, g_effect, g_label in golds:
+                if intervals_overlap(p_cause, g_cause) and intervals_overlap(p_effect, g_effect):
+                    if p_label == g_label:
+                        is_match = True
+                        break # Found a correct match for this prediction
+            if is_match:
+                tp += 1
+            else:
+                fp += 1 # Prediction is wrong if no matching gold relation is found
+        
+        # Calculate FN from the perspective of gold standards
+        for g_cause, g_effect, g_label in golds:
+            is_found = False
+            for p_cause, p_effect, p_label in preds:
+                if intervals_overlap(g_cause, p_cause) and intervals_overlap(g_effect, p_effect):
+                    if g_label == p_label:
+                        is_found = True
+                        break # This gold relation was found
+            if not is_found:
+                fn += 1
+        return tp, fp, fn
+    else:
+        raise ValueError(f"Unknown evaluation mode: '{mode}'")
 
-    # ---- summary -------------------------------------------
-    tp, fp, fn = cnt["TP"], cnt["FP"], cnt["FN"]
-    prec = tp / (tp + fp) if tp + fp else 0.0
-    rec  = tp / (tp + fn) if tp + fn else 0.0
+
+# --- Task-specific Evaluation Functions ---
+
+def _task2(gold: list, pred: list, scenario: str, eval_mode: str) -> dict:
+    """Task 2: Cause/Effect Span Extraction."""
+    counts = {lbl: {'TP': 0, 'FP': 0, 'FN': 0} for lbl in ('cause', 'effect')}
+    for g_doc, p_doc in zip(gold, pred):
+        if scenario.lower() == 'filtered_causal' and not (
+            any(lbl in {'cause', 'effect'} for *_, lbl, _ in g_doc['entities']) and
+            any(lbl in {'cause', 'effect'} for *_, lbl, _ in p_doc['entities'])
+        ): continue
+        
+        gb = defaultdict(list); pb = defaultdict(list)
+        for s, e, lbl, _ in g_doc['entities']:
+            if lbl in counts: gb[lbl].append((s, e))
+        for s, e, lbl, _ in p_doc['entities']:
+            if lbl in counts: pb[lbl].append((s, e))
+        
+        for lbl in counts:
+            tp, fp, fn = calculate_span_metrics(gb[lbl], pb[lbl], mode=eval_mode)
+            counts[lbl]['TP'] += tp
+            counts[lbl]['FP'] += fp
+            counts[lbl]['FN'] += fn
+
+    result = {}
+    for lbl, c in counts.items():
+        prec = c['TP'] / (c['TP'] + c['FP']) if (c['TP'] + c['FP']) else 0.0
+        rec = c['TP'] / (c['TP'] + c['FN']) if (c['TP'] + c['FN']) else 0.0
+        f1  = 2 * prec * rec / (prec + rec) if (prec + rec) else 0.0
+        result[lbl] = {'Precision': prec, 'Recall': rec, 'F1': f1, 'TP': c['TP'], 'FP': c['FP'], 'FN': c['FN']}
+    return result
+
+def _task3(gold_docs: list, pred_docs: list, scenario: str, eval_mode: str, label_map: dict = None) -> dict:
+    """Task 3: Cause→Effect Relation Classification."""
+    total_tp, total_fp, total_fn = 0, 0, 0
+    norm = (lambda lbl: label_map.get(lbl, lbl)) if label_map else (lambda lbl: lbl)
+
+    for g_doc, p_doc in zip(gold_docs, pred_docs):
+        if scenario.lower() == 'filtered_causal' and not (
+            any(lbl in {'cause', 'effect'} for *_, lbl, _ in g_doc['entities']) and
+            any(lbl in {'cause', 'effect'} for *_, lbl, _ in p_doc['entities'])
+        ): continue
+
+        g_ent = {eid: (s, e, lbl) for s, e, lbl, eid in g_doc['entities']}
+        p_ent = {eid: (s, e, lbl) for s, e, lbl, eid in p_doc['entities']}
+        
+        gold_links = [
+            ((g_ent[src][0], g_ent[src][1]), (g_ent[tgt][0], g_ent[tgt][1]), norm(lbl))
+            for src, tgt, lbl in g_doc['relations']
+            if src in g_ent and tgt in g_ent and g_ent[src][2] == 'cause' and g_ent[tgt][2] == 'effect'
+        ]
+        pred_links = [
+            ((p_ent[src][0], p_ent[src][1]), (p_ent[tgt][0], p_ent[tgt][1]), norm(lbl))
+            for src, tgt, lbl in p_doc['relations']
+            if src in p_ent and tgt in p_ent and p_ent[src][2] == 'cause' and p_ent[tgt][2] == 'effect'
+        ]
+
+        tp, fp, fn = calculate_relation_metrics(gold_links, pred_links, mode=eval_mode)
+        total_tp += tp
+        total_fp += fp
+        total_fn += fn
+
+    prec = total_tp / (total_tp + total_fp) if total_tp + total_fp else 0.0
+    rec  = total_tp / (total_tp + total_fn) if total_tp + total_fn else 0.0
     f1   = 2 * prec * rec / (prec + rec) if prec + rec else 0.0
-    acc  = tp / (tp + fp + fn) if tp + fp + fn else 0.0
-    return {"TP": tp, "FP": fp, "FN": fn,
-            "Accuracy": acc, "Precision": prec,
-            "Recall": rec, "F1": f1}
+    acc  = total_tp / (total_tp + total_fp + total_fn) if total_tp + total_fp + total_fn else 0.0
+    return {'TP': total_tp, 'FP': total_fp, 'FN': total_fn, 'Accuracy': acc, 'Precision': prec, 'Recall': rec, 'F1': f1}
 
 
+# --- Main Driver and Display Functions ---
 
-# Driver evaluate function
-def evaluate(gold_df, pred_df, scenario='A', label_map=None, penalise_orphans=False):
+def evaluate(gold_df, pred_df, scenario='all_documents', label_map=None, eval_mode='discovery'):
     """
     Evaluate causal extraction performance.
     
     Args:
-        gold_df: Pandas DataFrame with the gold standard data
-        pred_df: Pandas DataFrame with the prediction data
-        scenario: Evaluation scenario ('A' or 'B')
-        label_map: Optional mapping for normalizing relation labels
-        penalise_orphans: Whether to penalize relations without matching entities
-        
+        gold_df, pred_df: Pandas DataFrames with gold and prediction data.
+        scenario: Evaluation scenario ('all_documents' or 'filtered_causal').
+        label_map: Optional mapping for normalizing relation labels.
+        eval_mode (str): Mode for Task 2/3 evaluation.
+                         'discovery' (default): Ignores extra overlapping items.
+                         'coverage': Counts all overlapping correct items as TPs.
     Returns:
-        Dictionary with evaluation results for all tasks
+        Dictionary with evaluation results.
     """
-    # Process DataFrames to the expected format for evaluation
     gold = []
     pred = []
     
-    # Process gold data
-    for _, row in gold_df.iterrows():
-        did = str(row.get('id', len(gold)))
-        entities = []
-        relations = []
-        
-        # Process entities
-        if 'entities' in row and row['entities']:
+    def process_df(df):
+        docs = []
+        for _, row in df.iterrows():
+            did = str(row.get('id', len(docs)))
+            entities_str = row.get('entities', '[]')
+            relations_str = row.get('relations', '[]')
             try:
-                # Handle case where entities is a string representation of a list/dict
-                if isinstance(row['entities'], str):
-                    # First try json.loads
-                    try:
-                        entities_data = json.loads(row['entities'])
-                    except json.JSONDecodeError:
-                        # If json.loads fails, try ast.literal_eval which can handle single quotes
-                        entities_data = ast.literal_eval(row['entities'])
-                else:
-                    entities_data = row['entities']
-                
-                # Create a temporary dict to mimic the format expected by _parse_ents
-                temp_dict = {"labels": entities_data if isinstance(entities_data, list) else []}
-                entities = _parse_ents(temp_dict, did)
-            except Exception as e:
-                print(f"Error processing entities for row {did}: {e}")
-        
-        # Process relations
-        if 'relations' in row and row['relations']:
+                entities = _parse_ents({"labels": ast.literal_eval(entities_str)}, did)
+            except (ValueError, SyntaxError): entities = []
             try:
-                # Handle case where relations is a string representation of a list/dict
-                if isinstance(row['relations'], str):
-                    # First try json.loads
-                    try:
-                        relations_data = json.loads(row['relations'])
-                    except json.JSONDecodeError:
-                        # If json.loads fails, try ast.literal_eval which can handle single quotes
-                        relations_data = ast.literal_eval(row['relations'])
-                else:
-                    relations_data = row['relations']
-                
-                # Create a temporary dict to mimic the format expected by _parse_rels
-                temp_dict = {"relations": relations_data if isinstance(relations_data, list) else []}
-                relations = _parse_rels(temp_dict)
-            except Exception as e:
-                print(f"Error processing relations for row {did}: {e}")
-        
-        gold.append({
-            "text": str(row.get('text', "")),
-            "entities": entities,
-            "relations": relations
-        })
-    
-    # Process prediction data
-    for _, row in pred_df.iterrows():
-        did = str(row.get('id', len(pred)))
-        entities = []
-        relations = []
-        
-        # Process entities
-        if 'entities' in row and row['entities']:
-            try:
-                # Handle case where entities is a string representation of a list/dict
-                if isinstance(row['entities'], str):
-                    # First try json.loads
-                    try:
-                        entities_data = json.loads(row['entities'])
-                    except json.JSONDecodeError:
-                        # If json.loads fails, try ast.literal_eval which can handle single quotes
-                        entities_data = ast.literal_eval(row['entities'])
-                else:
-                    entities_data = row['entities']
-                
-                # Create a temporary dict to mimic the format expected by _parse_ents
-                temp_dict = {"labels": entities_data if isinstance(entities_data, list) else []}
-                entities = _parse_ents(temp_dict, did)
-            except Exception as e:
-                print(f"Error processing entities for row {did}: {e}")
-        
-        # Process relations
-        if 'relations' in row and row['relations']:
-            try:
-                # Handle case where relations is a string representation of a list/dict
-                if isinstance(row['relations'], str):
-                    # First try json.loads
-                    try:
-                        relations_data = json.loads(row['relations'])
-                    except json.JSONDecodeError:
-                        # If json.loads fails, try ast.literal_eval which can handle single quotes
-                        relations_data = ast.literal_eval(row['relations'])
-                else:
-                    relations_data = row['relations']
-                
-                # Create a temporary dict to mimic the format expected by _parse_rels
-                temp_dict = {"relations": relations_data if isinstance(relations_data, list) else []}
-                relations = _parse_rels(temp_dict)
-            except Exception as e:
-                print(f"Error processing relations for row {did}: {e}")
-        
-        pred.append({
-            "text": str(row.get('text', "")),
-            "entities": entities,
-            "relations": relations
-        })
+                relations = _parse_rels({"relations": ast.literal_eval(relations_str)})
+            except (ValueError, SyntaxError): relations = []
+            docs.append({"text": str(row.get('text', "")), "entities": entities, "relations": relations})
+        return docs
 
-    if len(gold) != len(pred):
-        raise ValueError("Length mismatch")
-    if gold[0]["text"][:30] != pred[0]["text"][:30]:
-        raise ValueError("Order mismatch")
+    gold = process_df(gold_df)
+    pred = process_df(pred_df)
+
+    if len(gold) != len(pred): raise ValueError("Length mismatch between gold and pred data.")
+
+    task2_results = _task2(gold, pred, scenario, eval_mode=eval_mode)
+    task2_macro = macro_average_task2(task2_results)
+    task3_results = _task3(gold, pred, scenario, eval_mode=eval_mode, label_map=label_map)
 
     return {
         "Task1": _task1(gold, pred),
-        "Task2": _task2(gold, pred, scenario),
-        "Task2_macro": macro_average_task2(_task2(gold, pred, scenario)),
-        "Task3": _task3(gold, pred, scenario,
-                        label_map=label_map,
-                        penalise_orphans=penalise_orphans),
-        "Total_Macro": total_macro_average(
-            _task1(gold, pred),
-            macro_average_task2(_task2(gold, pred, scenario)),
-            _task3(gold, pred, scenario,
-                   label_map=label_map,
-                   penalise_orphans=penalise_orphans)
-        )    }
-
+        "Task2": task2_results,
+        "Task2_macro": task2_macro,
+        "Task3": task3_results,
+        "Total_Macro": total_macro_average(_task1(gold, pred), task2_macro, task3_results)
+    }
 
 def macro_average_task2(task2_result):
-    """
-    Compute macro average for Task 2 (cause/effect).
-    """
     keys = ["Precision", "Recall", "F1"]
-    macro = {}
-    for k in keys:
-        macro[k] = (task2_result["cause"][k] + task2_result["effect"][k]) / 2
-    macro["TP_precision"] = task2_result["cause"]["TP_precision"] + task2_result["effect"]["TP_precision"]
-    macro["TP_recall"] = task2_result["cause"]["TP_recall"] + task2_result["effect"]["TP_recall"]
+    macro = {k: (task2_result["cause"][k] + task2_result["effect"][k]) / 2 for k in keys}
+    macro["TP"] = task2_result["cause"]["TP"] + task2_result["effect"]["TP"]
     macro["FP"] = task2_result["cause"]["FP"] + task2_result["effect"]["FP"]
     macro["FN"] = task2_result["cause"]["FN"] + task2_result["effect"]["FN"]
     return macro
 
-
 def total_macro_average(task1, task2_macro, task3):
-    """
-    Compute macro average across Task1, Task2_macro, and Task3.
-    """
     keys = ["Precision", "Recall", "F1"]
-    macro = {}
-    for k in keys:
-        macro[k] = (task1[k] + task2_macro[k] + task3[k]) / 3
-    return macro
+    return {k: (task1[k] + task2_macro[k] + task3[k]) / 3 for k in keys}
 
-
-def display_results(results, scenario):
-    """
-    Display evaluation results in a clear, structured format.
-    
-    Args:
-        results: Results dictionary returned by the evaluate function
-        scenario: Scenario identifier to display in the header
-        
-    Prints:
-        Formatted evaluation results with task information and metrics
-    """
+def display_results(results, title_prefix=""):
     border = "=" * 70
-    title = f" Scenario {scenario} Results "
+    title = f" {title_prefix} Results "
+    print(f"\n{border}\n{title:^70}\n{border}")
     
-    print(f"\n{border}")
-    print(f"{title:^70}")
-    print(f"{border}")
-    
-    if isinstance(results, dict):
-        for metric_type, metrics in results.items():
-            print(f"\n【 {metric_type} 】")
-            
-            if isinstance(metrics, dict):
-                # Find the longest metric name for alignment
-                max_len = max(len(str(key)) for key in metrics.keys())
-                separator = "-" * 60
-                
-                # Table header
-                print(f"{separator}")
-                print(f"{'Metric':<{max_len+5}} | {'Value':>15}")
-                print(f"{separator}")
-                
-                # Print each metric with proper alignment
-                for key, value in metrics.items():
-                    metric_name = f"{str(key):<{max_len+5}}"
-                    
-                    if isinstance(value, float):
-                        # Format float values with 4 decimal places
-                        print(f"{metric_name} | {value:>15.4f}")
-                    elif isinstance(value, dict):
-                        # Handle nested dictionary values - print each nested value on its own line
-                        print(f"{metric_name} |")
-                        for nested_key, nested_value in value.items():
-                            if isinstance(nested_value, float):
-                                print(f"  - {nested_key:<{max_len}} | {nested_value:>15.4f}")
-                            else:
-                                print(f"  - {nested_key:<{max_len}} | {nested_value:>15}")
-                    else:
-                        print(f"{metric_name} | {value:>15}")
-                        
-                print(f"{separator}")
+    for task_name, metrics in results.items():
+        print(f"\n--- {task_name} ---")
+        if isinstance(metrics, dict):
+            if any(isinstance(v, dict) for v in metrics.values()):
+                for sub_task, sub_metrics in metrics.items():
+                    print(f"  Label: {sub_task}")
+                    for key, value in sub_metrics.items():
+                        print(f"    {key:<12}: {value: >8.4f}" if isinstance(value, float) else f"    {key:<12}: {value: >8}")
             else:
-                print(f"  {metrics}")
-    else:
-        print(f"{results}")
-    
+                 for key, value in metrics.items():
+                    print(f"  {key:<12}: {value: >8.4f}" if isinstance(value, float) else f"  {key:<12}: {value: >8}")
     print(f"\n{border}\n")
+
+def main():
+    gold_df = pd.read_csv(r"C:\\Users\\norouzin\\Desktop\\JointLearning\\datasets\\expert_multi_task_data\\test.csv")
+    pred_df = pd.read_csv(r"C:\\Users\\norouzin\\Desktop\\JointLearning\\predictions\\expert_bert_softmax_cls+span_doccano.csv")
+
+    print("\n" + "#" * 15 + " Running in 'discovery' mode (ignoring extra overlaps) " + "#" * 15)
+    results_discovery = evaluate(gold_df, pred_df, scenario='all_documents', eval_mode='discovery')
+    display_results(results_discovery, title_prefix="All Documents - 'discovery' mode")
+
+    print("\n" + "#" * 15 + " Running in 'coverage' mode (all overlaps are TPs) " + "#" * 15)
+    results_coverage = evaluate(gold_df, pred_df, scenario='all_documents', eval_mode='coverage')
+    display_results(results_coverage, title_prefix="All Documents - 'coverage' mode")
+
+    print("\n" + "#" * 15 + " Running in 'discovery' mode for Filtered Causal " + "#" * 15)
+    results_scenario_b = evaluate(gold_df, pred_df, scenario='filtered_causal', eval_mode='discovery')
+    display_results(results_scenario_b, title_prefix="Filtered Causal - 'discovery' mode")
+    print("\n" + "#" * 15 + " Running in 'coverage' mode for Filtered Causal " + "#" * 15)
+    results_scenario_b_coverage = evaluate(gold_df, pred_df, scenario='filtered_causal', eval_mode='coverage')
+    display_results(results_scenario_b_coverage, title_prefix="Filtered Causal - 'coverage' mode")
+    print("\n" + "#" * 15 + " Evaluation completed! " + "#" * 15)
+
+if __name__ == "__main__":
+    main()

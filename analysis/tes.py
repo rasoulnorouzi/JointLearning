@@ -1,23 +1,19 @@
-# %%
-import sys
-import os
-sys.path.append(os.path.abspath(os.path.join(os.getcwd(), '..')))
-# %%
+# # %%
 import json
 import torch
 from transformers import AutoTokenizer
-from src.jointlearning.config import MODEL_CONFIG, id2label_bio, id2label_cls
+from src.jointlearning.config import MODEL_CONFIG
 from src.jointlearning.model import JointCausalModel
 from src.causal_pseudo_labeling.llm2doccano import convert_llm_output_to_doccano
-from new_causal_eval import evaluate, display_results
+from analysis.causal_eval import evaluate, display_results
 import pandas as pd
 import tqdm
 # %%
 models = {
-        'bert-softmax': r"/home/rasoul/Desktop/JointLearning/src/jointlearning/expert_bert_softmax/expert_bert_softmax_model.pt",
-        'bert-gce': r"/home/rasoul/Desktop/JointLearning/src/jointlearning/expert_bert_gce/expert_bert_gce_model.pt",
-        'bert-gce-softmax': r"/home/rasoul/Desktop/JointLearning/src/jointlearning/expert_bert_gce_softmax/expert_bert_gce_softmax_model.pt",
-        'bert-gce-freeze-softmax': r"/home/rasoul/Desktop/JointLearning/src/jointlearning/expert_bert_gce_freeze_softmax/expert_bert_gce_freeze_softmax_model.pt",
+        'bert-softmax': "src/jointlearning/expert_bert_softmax/expert_bert_softmax_model.pt",
+        'bert-gce': "src/jointlearning/expert_bert_gce/expert_bert_gce_model.pt",
+        'bert-gce-softmax': "src/jointlearning/expert_bert_gce_softmax/expert_bert_gce_softmax_model.pt",
+        'bert-gce-freeze-softmax': "src/jointlearning/expert_bert_gce_freeze_softmax/expert_bert_gce_freeze_softmax_model.pt",
     }
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -28,7 +24,7 @@ causal_classification_modes = ['cls+span', 'span_only']
 batch_size = 32
 scenarios = ['all_documents', 'filtered_causal']
 eval_modes = ['coverage', 'discovery']
-test_data_dir = '/home/rasoul/Desktop/JointLearning/datasets/expert_multi_task_data/test.csv'
+test_data_dir = 'datasets/expert_multi_task_data/test.csv'
 save_dir = 'analysis/predictions'
 # %%
 TOKENIZER = AutoTokenizer.from_pretrained(MODEL_CONFIG["encoder_name"])
