@@ -5,7 +5,10 @@ This guide explains how to upload the trained `JointCausalModel` to the Hugging 
 ## Files in this Directory
 
 *   `configuration_joint_causal.py`: Defines the model's configuration class, `JointCausalConfig`. This class holds the model's hyperparameters and architecture details.
-*   `modeling_joint_causal.py`: Contains the implementation of the `JointCausalModel` itself.
+*   `modeling_joint_causal.py`: This is the implementation of the `JointCausalModel` itself, adapted to be compatible with the Hugging Face `AutoModel` API. Key features for compatibility include:
+    *   The `JointCausalModel` class inherits from `transformers.PreTrainedModel`.
+    *   It is linked to its configuration class via the `config_class` attribute.
+    *   The `save_for_hf.py` script registers both the model and its configuration using `register_for_auto_class`. This allows the `AutoModel` class to automatically find and load your custom model.
 *   `save_for_hf.py`: A script to save the trained model in a format compatible with the Hugging Face Hub and the `AutoModel` API.
 *   `upload_to_hf.py`: A script to upload the saved model files to a repository on the Hugging Face Hub.
 *   `automodel_test.py`: A script to test the uploaded model from the hub.
@@ -20,7 +23,7 @@ The `save_for_hf.py` script is responsible for saving your trained model in the 
 
 **Nuances and Arguments:**
 
-*   **`model_weights_path`**: Inside the script, you need to set the pytorch `model_weights_path` variable to the correct path of your trained model's weights file (`.pt` file). 
+*   **`model_weights_path`**: Inside the script, you need to set the pytorch `model_weights_path` variable to the correct path of your trained model's weights file (`.pt` file). Replace with your actual model weights path, e.g., `"path/to/your/trained_model.pt"`.
 *   **`save_directory`**: This variable determines where the script will save the Hugging Face-compatible model files. The default is `"hf_port/joint_causal_model_for_hf"`.
 
 **To run the script:**
