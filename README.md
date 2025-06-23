@@ -42,11 +42,7 @@ results = model.predict(
 )
 
 # Results contain causal analysis for each sentence
-for result in results:
-    print(f"Text: {result['text']}")
-    print(f"Is Causal: {result['causal']}")
-    for rel in result['relations']:
-        print(f"  {rel['cause']} → {rel['effect']} ({rel['type']})")
+print(results)
 ```
 
 ### Installation for Development
