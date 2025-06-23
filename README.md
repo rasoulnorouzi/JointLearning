@@ -214,9 +214,7 @@ JointLearning/
 │   ├── evaluate_joint_causal_model.py  # Evaluation metrics and reporting
 │   ├── main.py                 # Main training script
 │   ├── loss.py                 # Custom loss functions (e.g., GCE loss)
-│   ├── utility.py              # Helper functions (class weights, label counting)
-│   ├── rasoul.py               # Inference utilities and model loading
-│   └── crf_model_inference.py  # CRF-based model variant (optional)
+│   └── utility.py              # Helper functions (class weights, label counting)
 │
 ├── hf_port/                     # Hugging Face Hub integration
 │   ├── modeling_joint_causal.py     # HF-compatible model implementation
@@ -232,17 +230,13 @@ JointLearning/
 │       ├── configuration_joint_causal.py # Config code
 │       └── tokenizer files     # Tokenizer configuration and vocab
 │
-├── Notebooks/                   # Jupyter notebooks for analysis and experimentation
-│   ├── expert_bert_softmax_test.ipynb      # Model testing and validation
-│   ├── llm_testing.ipynb                   # LLM pseudo-labeling experiments
-│   ├── model_evaluation_analysis.ipynb    # Detailed performance analysis
-│   ├── evaluation_report.md               # Evaluation summary report
-│   └── predictions/                       # Saved model predictions
-│
-└── myenv/                       # Virtual environment (created during setup)
-    ├── Scripts/                # Environment executables
-    ├── Lib/site-packages/     # Installed packages
-    └── pyvenv.cfg             # Environment configuration
+└── Notebooks/                   # Jupyter notebooks for analysis and experimentation
+   ├── expert_bert_softmax_test.ipynb      # Model testing and validation
+   ├── llm_testing.ipynb                   # LLM pseudo-labeling experiments
+   ├── model_evaluation_analysis.ipynb    # Detailed performance analysis
+   ├── evaluation_report.md               # Evaluation summary report
+   └── predictions/                       # Saved model predictions
+
 ```
 
 ## 🔧 Key Scripts & Their Functions
@@ -343,7 +337,7 @@ The `entities` column contains annotations with these labels:
   "id": 456,
   "from_id": 123,             # ID of the cause entity
   "to_id": 124,               # ID of the effect entity  
-  "type": "Rel_CE"            # Relation type: "Rel_CE" or "Rel_Zero"
+  "type": "Rel_CE"            # Relation type: "Rel_CE" 
 }
 ```
 
@@ -356,7 +350,6 @@ The training pipeline automatically converts this format to the internal represe
 
 ### Supported Relation Types
 - **`Rel_CE`**: Positive causal relation (cause → effect)
-- **`Rel_Zero`**: Negative/null relation (used for hard negatives)
 
 ## 🎯 Prediction Modes
 
