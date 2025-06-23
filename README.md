@@ -45,6 +45,51 @@ results = model.predict(
 print(results)
 ```
 
+### Example Output
+
+```json
+[
+  {
+    "text": "Smoking causes lung cancer and heart disease",
+    "causal": true,
+    "relations": [
+      {
+        "cause": "Smoking",
+        "effect": "lung cancer",
+        "type": "Rel_CE"
+      },
+      {
+        "cause": "Smoking", 
+        "effect": "heart disease",
+        "type": "Rel_CE"
+      }
+    ]
+  },
+  {
+    "text": "Exercise improves physical health and mental well-being",
+    "causal": true,
+    "relations": [
+      {
+        "cause": "Exercise",
+        "effect": "physical health",
+        "type": "Rel_CE"
+      },
+      {
+        "cause": "Exercise",
+        "effect": "mental well-being",
+        "type": "Rel_CE"
+      }
+    ]
+  },
+  {
+    "text": "This is a non-causal sentence about weather",
+    "causal": false,
+    "relations": []
+  }
+]
+```
+```
+
 ### Installation for Development
 
 ```bash
@@ -461,9 +506,11 @@ python upload_to_hf.py
 python automodel_test.py
 ```
 
-## 📋 Example Output
+## 📋 Example Output Format
 
-```python
+The model returns a list of dictionaries, one for each input sentence:
+
+```json
 {
   "text": "Smoking causes lung cancer and heart disease",
   "causal": true,
