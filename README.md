@@ -36,7 +36,7 @@ sentences = [
 results = model.predict(
     sentences,
     tokenizer=tokenizer,
-    rel_mode="neural_only",        # "neural_only", "auto", or "heuristic"
+    rel_mode="neural",        # "neural", "auto", or "heuristic"
     rel_threshold=0.8,             # Confidence threshold for relations
     cause_decision="cls+span"      # "cls+span", "cls_only", or "span_only"
 )
@@ -397,7 +397,7 @@ The training pipeline automatically converts this format to the internal represe
 The model supports different prediction strategies:
 
 ### Relation Extraction Modes
-- **`neural_only`**: Always use the neural relation head for all valid cause-effect pairs
+- **`neural`**: Always use the neural relation head for all valid cause-effect pairs
 - **`auto`**: Simplified relation extraction for sentences with single causes/effects  
 
 ### Causality Decision Strategies  
