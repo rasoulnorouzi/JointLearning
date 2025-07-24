@@ -781,9 +781,13 @@ class KrippendorffSpanMatcher:
                 sentence_row.append(binary_value)
             reliability_matrix.append(sentence_row)
         
-        # Count agreement patterns
-        causal_agreements = sum(1 for row in reliability_matrix if row == [1, 1, 1])
-        non_causal_agreements = sum(1 for row in reliability_matrix if row == [0, 0, 0])
+        # Count agreement patterns (dynamic based on number of annotators)
+        num_annotators = len(self.annotator_names)
+        all_causal = [1] * num_annotators
+        all_non_causal = [0] * num_annotators
+        
+        causal_agreements = sum(1 for row in reliability_matrix if row == all_causal)
+        non_causal_agreements = sum(1 for row in reliability_matrix if row == all_non_causal)
         mixed_disagreements = len(reliability_matrix) - causal_agreements - non_causal_agreements
         
         total_agreements = causal_agreements + non_causal_agreements
