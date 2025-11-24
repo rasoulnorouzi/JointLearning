@@ -1,7 +1,14 @@
 # %%
 import random
-from dataset_collator import CausalDatasetCollator, CausalDataset
-from config import id2label_bio, id2label_rel, NEGATIVE_SAMPLE_REL_ID
+import sys
+from pathlib import Path
+
+# Add the project root to sys.path
+project_root = Path(__file__).parent.parent
+sys.path.insert(0, str(project_root))
+
+from src.jointlearning.dataset_collator import CausalDatasetCollator, CausalDataset
+from src.jointlearning.config import id2label_bio, id2label_rel, NEGATIVE_SAMPLE_REL_ID
 import pandas as pd
 import torch
 
@@ -131,10 +138,9 @@ if __name__ == '__main__':
     NEGATIVE_SAMPLING_RATE_IN_REPORT = 2.0 # Increased to see more negatives
     MAX_LEN_FOR_DATASET_TRUNCATION = 256 
 
-    # Ensure this path is correct for your environment
-    CSV_FILE_PATH = "/home/rnorouzini/JointLearning/datasets/expert_multi_task_data/val.csv" # Adjust as needed
-    # Assuming train.csv is in the same directory as the script
-    # CSV_FILE_PATH = "datasets/train.csv" # Or if it's in a subdirectory
+    # Use relative path from project root
+    CSV_FILE_PATH = project_root / "datasets" / "expert_multi_task_data" / "val.csv"
+    CSV_FILE_PATH = str(CSV_FILE_PATH)  # Convert to string for compatibility
 
     generate_full_report(
         csv_path=CSV_FILE_PATH, 

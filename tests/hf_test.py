@@ -1,27 +1,29 @@
-# test_predict.py
-"""
-Test script for the HuggingFace-compatible `predict` method of JointCausalModel.
-Mirrors the previous usage of prediction.py, using the same test sentences and settings.
-"""
-import json
+from __future__ import annotations
 import torch
-from transformers import AutoTokenizer
+import torch.nn as nn
+from transformers import AutoModel, AutoTokenizer
+from typing import Dict, Tuple, Optional, Any, List
+from huggingface_hub import PyTorchModelHubMixin # Ensure this is imported
+from model import JointCausalModel
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
 try:
-    from .config import MODEL_CONFIG, id2label_bio, id2label_cls
-    from .model import JointCausalModel
+    from .config import MODEL_CONFIG, id2label_bio, id2label_rel, id2label_cls
 except ImportError:
-    from config import MODEL_CONFIG, id2label_bio, id2label_cls  # type: ignore
-    from model import JointCausalModel  # type: ignore
+    from config import MODEL_CONFIG, id2label_bio, id2label_rel, id2label_cls
 
-# Load model (adjust path or repo as needed)
-# If you have a local checkpoint, use the path. Otherwise, use the HuggingFace repo name.
-MODEL_PATH = r"C:\Users\norouzin\Desktop\JointLearning\src\jointlearning\expert_bert_softmax\expert_bert_softmax_model.pt"  # <-- CHANGE THIS to your model path or repo
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-TOKENIZER = AutoTokenizer.from_pretrained(MODEL_CONFIG["encoder_name"])
+print(f"id2label_bio: {id2label_bio}")
+print(f"id2label_rel: {id2label_rel}")
 
-def main():
-    # Test sentences (same as in docstring/example)
-    test_sents = ["promoting ri might reduce risk factors for drug use and enhance the effects of protective factors (brook et al., 1998).;;",
+tokenizer = AutoTokenizer.from_pretrained(MODEL_CONFIG["encoder_name"])
+model_path = r"C:\Users\norouzin\Desktop\JointLearning\src\jointlearning\expert_bert_softmax\expert_bert_softmax_model.pt"
+model = JointCausalModel(**MODEL_CONFIG)
+model.load_state_dict(torch.load(model_path, map_location=device))
+model.to(device)
+model.eval()
+
+test = ["promoting ri might reduce risk factors for drug use and enhance the effects of protective factors (brook et al., 1998).;;",
         "it is also considered that the process could easily be adapted for virtual delivery, thus increasing its accessibility.;;",
         "(corrected for unreliability; Bryk and Raudenbush 1992).;;",
         "big data technologies, however, facilitate the collection and sharing of these data on a large scale.;;",
@@ -47,29 +49,62 @@ def main():
         "The prolonged drought led to widespread crop failure, which in turn caused a sharp increase in food prices, ultimately contributing to social unrest in the region.",
         "social exclusion increases aggression and selfdefeating behavior while reducing intelligent thought and prosocial behavior.;;",
         "with careful attention to subjects' choices, we found that some factors representing personal traits make altruistic behavior recognizably different.;;",
-        "Reinforcement Sensitivity Theory (RST) (Gray & McNaughton, 2000) proposes that sensitivities to rewards and punishment explain the variation in personality traits and as such this paper examines the relationship between traits within this theoretical framework and behaviour in a public goods game (PGG).;;"
+        "Reinforcement Sensitivity Theory (RST) (Gray & fcfaughton, 2000) proposes that sensitivities to rewards and punishment explain the variation in personality traits and as such this paper examines the relationship between traits within this theoretical framework and behaviour in a public goods game (PGG).;;"
         ]
 
-    # Load model and tokenizer
-    # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    # model = JointCausalModel.from_pretrained(MODEL_PATH).to(device)
-    # tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH)
-
-    model=JointCausalModel(**MODEL_CONFIG)
-    model.load_state_dict(torch.load(MODEL_PATH,map_location=DEVICE))
-    model.to(DEVICE).eval(); 
-
-    # Run prediction (using the same settings as before)
-    results = model.predict(
-        test_sents,
-        tokenizer=TOKENIZER,
-        rel_mode="neural_only",           # or "auto"
-        rel_threshold=0.8,         # adjust as needed
-        cause_decision="span_only" # or "cls_only", "span_only"
+for i, text_sample in enumerate(test):
+    print(f"--- Sample {i+1} ---")
+    print(f"Input Text: {text_sample}")    # Use the model's predict method to get structured output
+    predictions = model.predict(
+        sents=[text_sample],
+        tokenizer=tokenizer,
+        rel_mode="neural_only",  # Use neural relation extraction
+        rel_threshold=0.999,  # Lowered threshold to capture more relations
+        cause_decision="cls+span"
     )
+    
+    prediction = predictions[0]
+    print(f"Causal Classification: {prediction['causal']}")
+    
+    # Print spans if available
+    if 'spans' in prediction and prediction['spans']:
+        print("Detected Spans:")
+        for span in prediction['spans']:
+            print(f"  {span['text']} -> {span['label']}")
+    
+    # Print relations if available
+    if 'relations' in prediction and prediction['relations']:
+        print("Detected Relations:")
+        for rel in prediction['relations']:
+            print(f"  Cause: \"{rel['cause']}\" -> Effect: \"{rel['effect']}\" (Type: {rel['type']})")
+    else:
+        print("No relations detected")
+    
+    # Also show raw BIO predictions for debugging
+    tokenized_input = tokenizer(
+        [text_sample],
+        padding=False,
+        truncation=True,
+        max_length=512,
+        return_tensors="pt"
+    )
+    tokenized_input = {k: v.to(device) for k, v in tokenized_input.items()}
 
-    # Print results
-    print(json.dumps(results, indent=2, ensure_ascii=False))
+    with torch.no_grad():
+        result = model(
+            input_ids=tokenized_input["input_ids"],
+            attention_mask=tokenized_input["attention_mask"]
+        )
 
-if __name__ == "__main__":
-    main()
+    bio_emissions = result["bio_emissions"]
+    argmax_bio = torch.argmax(bio_emissions, dim=-1)
+    tokens = tokenizer.convert_ids_to_tokens(tokenized_input["input_ids"][0])
+    
+    min_len = min(len(tokens), len(argmax_bio[0]))
+    map_tokens_to_bio = {token: id2label_bio[label.item()] for token, label in zip(tokens[:min_len], argmax_bio[0][:min_len])}
+
+    print("Raw BIO Predictions:")
+    for token, bio_label in map_tokens_to_bio.items():
+        print(f"  {token}: {bio_label}")
+    
+    print("-" * 40)

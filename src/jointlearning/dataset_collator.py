@@ -6,16 +6,28 @@ import json
 import random
 import re # For checking punctuation in random spans
 
-from config import (
-    DATASET_CONFIG,
-    label2id_bio,
-    entity_label_to_bio_prefix,
-    label2id_rel,
-    POSITIVE_RELATION_TYPE_TO_ID,
-    NEGATIVE_SAMPLE_REL_ID,
-    MODEL_CONFIG,
-    SEED
-)
+try:
+    from .config import (
+        DATASET_CONFIG,
+        label2id_bio,
+        entity_label_to_bio_prefix,
+        label2id_rel,
+        POSITIVE_RELATION_TYPE_TO_ID,
+        NEGATIVE_SAMPLE_REL_ID,
+        MODEL_CONFIG,
+        SEED
+    )
+except ImportError:
+    from config import (
+        DATASET_CONFIG,
+        label2id_bio,
+        entity_label_to_bio_prefix,
+        label2id_rel,
+        POSITIVE_RELATION_TYPE_TO_ID,
+        NEGATIVE_SAMPLE_REL_ID,
+        MODEL_CONFIG,
+        SEED
+    )
 
 ignore_id = -100
 
