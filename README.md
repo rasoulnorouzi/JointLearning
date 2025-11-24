@@ -1,3 +1,18 @@
+# Causal Relationship Miner Web App
+
+> **🌐 Web Application**: This project provides a **Streamlit-based web interface** for extracting cause-effect relationships from PDF documents using the Joint Causal Learning Model.
+>
+> 📦 **GitHub Repository**: [rasoulnorouzi/causal_relation_miner](https://github.com/rasoulnorouzi/causal_relation_miner)
+>
+> **To run the web application locally**, please visit the repository above where you'll find:
+> - Complete setup and installation instructions
+> - Easy-to-use Windows launch scripts (`launch.bat`)
+> - Manual setup guide for advanced users
+> - Information about the web interface features
+> - PDF processing and causal relationship extraction capabilities
+
+---
+
 # Joint Causal Learning Model
 
 A neural network model for **joint causal extraction** from text, combining three interconnected tasks:
