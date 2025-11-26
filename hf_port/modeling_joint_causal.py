@@ -405,6 +405,16 @@ class JointCausalModel(PreTrainedModel):
                     uniq.append(r)
             rels = uniq
 
+            # If valid cause-effect spans are found but no relations extracted,
+            # mark as non-causal and remove spans
+            if cause_spans and effect_spans and not rels:
+                is_causal = False
+                spans = []  # Clear spans when no valid relations found
+
+            # If initially causal but no relations found, mark as non-causal
+            if is_causal and not rels:
+                is_causal = False
+
             # If the sentence is predicted as non-causal, ensure no spans or relations are returned
             if not is_causal:
                 outputs.append({

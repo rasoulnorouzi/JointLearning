@@ -68,7 +68,7 @@ def main():
         test_sents,
         tokenizer=TOKENIZER,
         rel_mode="neural_only",           # or "auto"
-        rel_threshold=0.6,         # adjust as needed
+        rel_threshold=0.85,         # adjust as needed
         cause_decision="span_only" # or "cls_only", "span_only"
     )
 

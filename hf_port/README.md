@@ -1,92 +1,174 @@
-# Uploading the Joint Causal Model to Hugging Face Hub
+---
+license: gpl-2.0
+language: en
+base_model: google-bert/bert-base-uncased
+pipeline_tag: token-classification
+tags:
+- causal-extraction
+- relation-extraction
+- bert
+- pytorch
+- causality
+library_name: transformers
+---
 
-This guide explains how to upload the trained `JointCausalModel` to the Hugging Face Hub, making it compatible with the `AutoModel` API.
+# JointCausalModel for Causal Extraction
 
-## Files in this Directory
+This repository contains JointCausalModel, a PyTorch-based model for joint causal extraction, optimized for use with the Hugging Face transformers library. The model is built upon `google-bert/bert-base-uncased` and is designed to identify and structure causal relationships within text.
 
-*   `configuration_joint_causal.py`: Defines the model's configuration class, `JointCausalConfig`. This class holds the model's hyperparameters and architecture details.
-*   `modeling_joint_causal.py`: This is the implementation of the `JointCausalModel` itself, adapted to be compatible with the Hugging Face `AutoModel` API. Key features for compatibility include:
-    *   The `JointCausalModel` class inherits from `transformers.PreTrainedModel`.
-    *   It is linked to its configuration class via the `config_class` attribute.
-    *   The `save_for_hf.py` script registers both the model and its configuration using `register_for_auto_class`. This allows the `AutoModel` class to automatically find and load your custom model.
-*   `save_for_hf.py`: A script to save the trained model in a format compatible with the Hugging Face Hub and the `AutoModel` API.
-*   `upload_to_hf.py`: A script to upload the saved model files to a repository on the Hugging Face Hub.
-*   `automodel_test.py`: A script to test the uploaded model from the hub.
-*   `config.py`: This file is not used.
-*   `joint_causal_model_for_hf/`: This directory is created by `save_for_hf.py` and contains the saved model, tokenizer, and configuration files.
+**GitHub Repository**: [https://github.com/rasoulnorouzi/JointLearning](https://github.com/rasoulnorouzi/JointLearning/tree/main)
 
-## Step-by-Step Guide to Upload Your Model
+## Model Description
 
-### Step 1: Save the Model in Hugging Face Format
+This model performs three tasks simultaneously:
 
-The `save_for_hf.py` script is responsible for saving your trained model in the correct format.
+1. **Sentence-level Causal Classification**: Determines whether a sentence contains a causal statement.
+2. **Span Extraction**: Identifies the specific Cause, Effect, and combined Cause-Effect spans within the text using a BIO tagging scheme.
+3. **Relation Extraction**: Establishes the relationships between the identified cause and effect spans.
 
-**Nuances and Arguments:**
+> **Note**: This model uses a custom implementation and requires `trust_remote_code=True` when loading with AutoModel.
 
-*   **`model_weights_path`**: Inside the script, you need to set the pytorch `model_weights_path` variable to the correct path of your trained model's weights file (`.pt` file). Replace with your actual model weights path, e.g., `"path/to/your/trained_model.pt"`.
-*   **`save_directory`**: This variable determines where the script will save the Hugging Face-compatible model files. The default is `"hf_port/joint_causal_model_for_hf"`.
+## How to Use
 
-**To run the script:**
+To get started, load the model and tokenizer from the Hugging Face Hub:
 
-```bash
-python hf_port/save_for_hf.py
+```python
+from transformers import AutoModel, AutoTokenizer
+
+repo_id = "rasoultilburg/SocioCausaNet"
+
+model = AutoModel.from_pretrained(
+    repo_id,
+    trust_remote_code=True
+)
+
+tokenizer = AutoTokenizer.from_pretrained(
+    repo_id
+)
 ```
 
-After running this script, the `hf_port/joint_causal_model_for_hf` directory will be created, containing the following files:
+### Inference API
 
-*   `config.json`: The model's configuration.
-*   `model.safetensors`: The model's weights.
-*   `modeling_joint_causal.py`: A copy of the model's implementation.
-*   `configuration_joint_causal.py`: A copy of the model's configuration class.
-*   `special_tokens_map.json`, `tokenizer_config.json`, `tokenizer.json`, `vocab.txt`: Tokenizer files.
+The primary method for inference is `model.predict()`, which processes a list of sentences and returns detailed causal information:
 
-### Step 2: Upload the Model to the Hugging Face Hub
-
-The `upload_to_hf.py` script uploads the contents of the `joint_causal_model_for_hf` directory to a repository on the Hugging Face Hub.
-
-**Nuances and Arguments:**
-
-*   **`REPO_ID`**: **This is the most important variable to change.** You must replace `"rasoultilburg/SocioCausaNet"` with your own Hugging Face repository ID, in the format `"YourUsername/YourRepoName"`. You need to create this repository on the Hugging Face website first.
-*   **`LOCAL_FOLDER`**: This variable points to the directory containing the files to be uploaded. The default is `"hf_port/joint_causal_model_for_hf"`, which is the output of the `save_for_hf.py` script.
-*   **`commit_message`**: You can change the commit message to describe the version of the model you are uploading.
-
-**Before running the script, you need to be logged into your Hugging Face account in your terminal:**
-
-```bash
-huggingface-cli login
+```python
+# Example of a simple prediction call
+results = model.predict(
+    sents=["The heavy rainfall led to severe flooding in the coastal regions."],
+    tokenizer=tokenizer,
+    rel_mode="neural",
+    rel_threshold=0.5,
+    cause_decision="cls+span"
+)
 ```
 
-You will be prompted to enter your Hugging Face API token.
+### Understanding the predict() Parameters
 
-**To run the script:**
+Think of this model as a "Causality Detective." The parameters are the instructions you give the detective on how to investigate the text.
 
-```bash
-python hf_port/upload_to_hf.py
+| Parameter | What it is & How it works | Analogy |
+|-----------|---------------------------|---------|
+| `sents` | The list of sentences you want the model to analyze. | The "case files" you give to the detective. |
+| `rel_mode` | Strategy for finding relationships.<br/>- `'auto'`: A smart, efficient mode. For simple cases (one cause-one effect, one cause-multiple effects, multiple causes-one effect), it automatically connects them using rules. For complex cases (multiple causes and multiple effects), it uses a neural network to determine connections.<br/>- `'neural_only'`: Uses a neural network to validate every potential cause-effect connection, checking whether there is a relationship between each pair of entities. More thorough but slower. | The Detective's Strategy<br/>- `'auto'` is the Smart Detective who uses simple logic for obvious cases but calls in the expert (neural network) for complex situations.<br/>- `'neural_only'` is the Expert Detective who carefully analyzes every possible connection using advanced techniques (neural network) regardless of complexity. |
+| `rel_threshold` | The confidence score needed to report a relationship (from 0.0 to 1.0).<br/>- High value (e.g., 0.8): Only reports relationships it's very sure about. Fewer, but more accurate results.<br/>- Low value (e.g., 0.3): Reports any potential link, even hunches. More results, but some may be incorrect. | The Detective's "Burden of Proof."<br/>- High value: Needs a lot of evidence before making an accusation.<br/>- Low value: Follows up on even the smallest lead. |
+| `cause_decision` | The criteria for deciding if a sentence is causal.<br/>- `'cls_only'`: Decides based on overall sentence meaning.<br/>- `'span_only'`: Decides only if it finds distinct "cause" and "effect" phrases.<br/>- `'cls+span'`: Strictest mode. Sentence must have causal meaning AND contain distinct cause/effect phrases. | The Panel of Judges<br/>- `'cls_only'` is the "Big Picture" Judge.<br/>- `'span_only'` is the "Evidence-Focused" Judge.<br/>- `'cls+span'` requires both judges to agree. Most reliable option. |
+
+## Complete Example
+
+Here is a complete, runnable example demonstrating how to use the model and format the output:
+
+```python
+from transformers import AutoModel, AutoTokenizer
+import json
+
+# 1. Load the model and tokenizer
+repo_id = "rasoultilburg/SocioCausaNet"
+model = AutoModel.from_pretrained(repo_id, trust_remote_code=True)
+tokenizer = AutoTokenizer.from_pretrained(repo_id)
+
+# 2. Define input sentences
+sentences = [
+    "Insomnia causes depression and a lack of concentration in children.",
+    "Due to the new regulations, the company's profits declined sharply.",
+    "The sun rises in the east."  # Non-causal example
+]
+
+# 3. Get predictions from the model
+results = model.predict(
+    sentences,
+    tokenizer=tokenizer,
+    rel_mode="neural",
+    rel_threshold=0.5,
+    cause_decision="cls+span"
+)
+
+# 4. Print the results in a readable format
+print(json.dumps(results, indent=2, ensure_ascii=False))
 ```
 
-### Step 3: Test the Uploaded Model
+### Example Output
 
-The `automodel_test.py` script shows how to load your model from the Hugging Face Hub using the `AutoModel` API.
+The predict method returns a list of dictionaries, where each dictionary corresponds to an input sentence:
 
-**Nuances and Arguments:**
-
-*   **`REPO_ID`**: You need to change the `REPO_ID` variable in this script to your repository ID.
-
-**To run the script:**
-
-```bash
-python hf_port/automodel_test.py
+```json
+[
+  {
+    "text": "Insomnia causes depression and a lack of concentration in children.",
+    "causal": true,
+    "relations": [
+      {
+        "cause": "Insomnia",
+        "effect": "depression",
+        "type": "Rel_CE"
+      },
+      {
+        "cause": "Insomnia",
+        "effect": "a lack of concentration in children",
+        "type": "Rel_CE"
+      }
+    ]
+  },
+  {
+    "text": "Due to the new regulations, the company's profits declined sharply.",
+    "causal": true,
+    "relations": [
+      {
+        "cause": "the new regulations",
+        "effect": "the company's profits declined sharply",
+        "type": "Rel_CE"
+      }
+    ]
+  },
+  {
+    "text": "The sun rises in the east.",
+    "causal": false,
+    "relations": [],
+    "spans": []
+  }
+]
 ```
 
-This will download the model from the hub and run a simple test to ensure it's working correctly.
+## Model Architecture
 
-## Summary of Actions
+The JointCausalModel requires custom code, which is why `trust_remote_code=True` is necessary. The architecture consists of a BERT encoder followed by three specialized heads for the joint tasks.
 
-1.  **Modify `save_for_hf.py`**: Set the correct `model_weights_path`.
-2.  **Run `save_for_hf.py`**: This will save your model in the correct format.
-3.  **Create a repository on the Hugging Face Hub.**
-4.  **Modify `upload_to_hf.py`**: Set your `REPO_ID`.
-5.  **Login to Hugging Face**: Use `huggingface-cli login`.
-6.  **Run `upload_to_hf.py`**: This will upload your model.
-7.  **Modify `automodel_test.py`**: Set your `REPO_ID`.
-8.  **Run `automodel_test.py`**: This will test your uploaded model.
+The key files defining the model are:
+
+- `modeling_joint_causal.py`: Contains the main JointCausalModel class which defines the model's architecture. It inherits from `transformers.PreTrainedModel` to ensure compatibility with the Hugging Face ecosystem.
+- `configuration_joint_causal.py`: Defines the JointCausalConfig class, which stores the model's configuration and hyperparameters.
+
+## Citation
+
+If you use this model in your work, please consider citing this repository.
+
+```bibtex
+@misc{jointcausalmodel2024,
+  title={JointCausalModel: Joint Learning for Causal Extraction},
+  author={Rasoul Norouzi},
+  year={2024},
+  howpublished={GitHub Repository},
+  url={https://github.com/rasoulnorouzi/JointLearning/tree/main}
+}
+```
+
+For more details and source code, visit the [GitHub repository](https://github.com/rasoulnorouzi/JointLearning/tree/main)
