@@ -12,13 +12,28 @@ import pandas as pd
 from typing import List, Dict, Tuple, Optional, Union
 
 
+def _strip_thinking(raw: str) -> str:
+    """Remove <think>...</think> reasoning blocks from model output."""
+    import re
+    # Remove complete think blocks
+    cleaned = re.sub(r'<think>.*?</think>\s*', '', raw, flags=re.DOTALL)
+    # If only opening tag (unclosed), remove everything after it
+    if '<think>' in cleaned and '</think>' not in cleaned:
+        cleaned = cleaned.split('<think>')[0]
+    return cleaned.strip()
+
+
 def parse_llm_output(raw: str) -> Dict:
     """Extract JSON dict from raw LLM output string.
 
-    Handles: bare JSON, JSON-in-text, double-escaped JSON, code-fenced JSON.
+    Handles: bare JSON, JSON-in-text, double-escaped JSON, code-fenced JSON,
+    and outputs with <think> reasoning blocks.
     """
     if not isinstance(raw, str):
         return {"text": "", "causal": False, "relations": []}
+
+    # Strip any <think> reasoning blocks before parsing
+    raw = _strip_thinking(raw)
 
     # Try direct parse first
     try:
@@ -64,6 +79,27 @@ def parse_llm_output(raw: str) -> Dict:
         if end != -1:
             try:
                 data = json.loads(raw[start:end + 1])
+                if isinstance(data, dict):
+                    return data
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+    # Try up to the last closing brace (handles garbage after valid JSON)
+    if start != -1:
+        last_brace = raw.rfind('}')
+        if last_brace > start:
+            try:
+                data = json.loads(raw[start:last_brace + 1])
+                if isinstance(data, dict):
+                    return data
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+    # Try completing unclosed JSON by appending closing brackets
+    if start != -1 and end == -1:
+        for closer in ['}]', ']}', '}}]', '}]}', '"}]}']:
+            try:
+                data = json.loads(raw[start:] + closer)
                 if isinstance(data, dict):
                     return data
             except (json.JSONDecodeError, TypeError):
