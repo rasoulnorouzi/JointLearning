@@ -31,9 +31,6 @@ except ImportError:
 
 ignore_id = -100
 
-# Set the seed for reproducibility
-random.seed(SEED)
-
 #  Helper function to check span overlap
 def check_span_overlap_util(span1, span2):
     """Checks if two token spans (start_idx, end_idx) overlap."""

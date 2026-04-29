@@ -4,12 +4,15 @@ from torch.utils.data import DataLoader
 import pandas as pd
 from config import DEVICE, SEED, MODEL_CONFIG, TRAINING_CONFIG, DATASET_CONFIG
 from model import JointCausalModel
-from utility import compute_class_weights, label_value_counts
+from utility import compute_class_weights, label_value_counts, set_seed, seed_worker
 from dataset_collator import CausalDataset, CausalDatasetCollator
 from config import id2label_cls, id2label_bio, id2label_rel
 from evaluate_joint_causal_model import evaluate_model, print_eval_report
 from trainer import train_model
 import random
+
+set_seed(SEED)
+
 # %%
 train_data_path = "datasets/expert_multi_task_data/train.csv"
 val_data_path = "datasets/expert_multi_task_data/val.csv"
@@ -47,18 +50,22 @@ collator = CausalDatasetCollator(
 # train_dataset = torch.utils.data.Subset(train_dataset, random.sample(range(len(train_dataset)), 20))
 # val_dataset = torch.utils.data.Subset(val_dataset, random.sample(range(len(val_dataset)), 20))
 # %%
+_g = torch.Generator()
+_g.manual_seed(SEED)
 train_dataloader = DataLoader(
     train_dataset,
     batch_size=TRAINING_CONFIG["batch_size"],
     collate_fn=collator,
-    shuffle=True
-
+    shuffle=True,
+    generator=_g,
+    worker_init_fn=seed_worker,
 )
 val_dataloader = DataLoader(
     val_dataset,
     batch_size=TRAINING_CONFIG["batch_size"],
     collate_fn=collator,
-    shuffle=False
+    shuffle=False,
+    worker_init_fn=seed_worker,
 )
 # %%
 model = JointCausalModel(
