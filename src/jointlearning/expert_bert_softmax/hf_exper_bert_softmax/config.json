@@ -1,0 +1,7 @@
+{
+  "dropout": 0.2,
+  "encoder_name": "bert-base-uncased",
+  "num_bio_labels": 7,
+  "num_cls_labels": 2,
+  "num_rel_labels": 2
+}

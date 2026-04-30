@@ -7,7 +7,7 @@ A reviewer asked to demonstrate the advantages of joint learning over alternativ
 
 Joint model results already exist — only producing baselines.
 
-## What gets created under `reviewer_extra_analysis/comparison_learning/`
+## What gets created under `reviewer_extra_analysis/sequential_learning/`
 
 | File | Purpose |
 |------|---------|
