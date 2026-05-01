@@ -1,0 +1,65 @@
+================================================================================
+COMPLETE LIST: All 20 CE Spans (Cause+Effect / Chain Entity Spans) in Test Set
+================================================================================
+Total: 20 CE spans across 17 samples
+CE span = a text span annotated with BOTH 'cause' AND 'effect' labels simultaneously
+
+CE#1   Sample=7469  Span=[86:158]
+       "accommodates a shift that can be justified with a systematic audit trail"
+
+CE#2   Sample=6693  Span=[97:124]
+       "devaluation is not expected"
+
+CE#3   Sample=6738  Span=[56:112]
+       "ostracized participants experiencing processing deficits"
+
+CE#4   Sample=6738  Span=[276:316]
+       "decreasing executive processing capacity"
+
+CE#5   Sample=6306  Span=[5:27]
+       "collaborations perform"
+
+CE#6   Sample=6306  Span=[134:178]
+       "coleadership throughout the research process"
+
+CE#7   Sample=7401  Span=[143:228]
+       "other staff within the prison needed to be told who was participating in the research"
+
+CE#8   Sample=6851  Span=[54:158]
+       "after territorial iz ation the consequences of overgrazing will be born solely by the private land owner"
+
+CE#9   Sample=6310  Span=[123:164]
+       "power imbued in the researcher's position"
+
+CE#10  Sample=7223  Span=[95:122]
+       "manipulating accountability"
+
+CE#11  Sample=7252  Span=[144:164]
+       "self-regulate better"
+
+CE#12  Sample=5757  Span=[38:96]
+       "understand patients' social support and contextual factors"
+
+CE#13  Sample=6376  Span=[42:85]
+       "must involve negotiation among stakeholders"
+
+CE#14  Sample=5925  Span=[131:150]
+       "increased awareness"
+
+CE#15  Sample=7459  Span=[109:167]
+       "attributing responsibility for a negative event externally"
+
+CE#16  Sample=7191  Span=[178:204]
+       "biased cognitive style-one"
+
+CE#17  Sample=7191  Span=[210:255]
+       "maintains the deleterious evects of ostracism"
+
+CE#18  Sample=7504  Span=[109:150]
+       "there is a greater chance of re-inclusion"
+
+CE#19  Sample=6798  Span=[48:114]
+       "avoid that the comparison between the risky and ambiguous settings"
+
+CE#20  Sample=6330  Span=[82:147]
+       "consumers to want more money as a means to secure control in life"
