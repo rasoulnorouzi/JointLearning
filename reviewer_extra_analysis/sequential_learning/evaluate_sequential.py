@@ -388,7 +388,7 @@ def main():
     # --- Evaluate across all 4 combos ---
     gold_df = pd.read_csv(TEST_DATA_PATH)
 
-    scenarios = ["all_documents", "filtered_causal"]
+    scenarios = ["end_to_end", "filtered_causal"]
     eval_modes = ["discovery", "coverage"]
 
     print("\n" + "=" * 70)

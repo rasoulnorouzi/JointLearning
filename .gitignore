@@ -4,12 +4,6 @@ __pycache__/
 .ipynb_checkpoints/
 *.pyc
 
-# Model weights
-*.pt
-*.bin
-*.safetensors
-*.h5
-*.pth
 
 # CLAUDE.md files
 **/CLAUDE.md
@@ -23,4 +17,6 @@ predictions/
 src/jointlearning/expert_bert_GCE_Softmax_Freeze
 src/jointlearning/expert_bert_GCE_Softmax_Normal
 src/jointlearning/expert_bert_GCE_weakSP
-src/jointlearning/expert_bert_softmax
+reviewer_extra_analysis/sequential_learning/models/bio/separate_bio.pt
+reviewer_extra_analysis/sequential_learning/models/rel/separate_rel.pt
+reviewer_extra_analysis/sequential_learning/models/cls/separate_cls.pt

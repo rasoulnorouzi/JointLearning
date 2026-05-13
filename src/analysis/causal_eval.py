@@ -219,13 +219,13 @@ def _task3(gold_docs: list, pred_docs: list, scenario: str, eval_mode: str, labe
 
 # --- Main Driver and Display Functions ---
 
-def evaluate(gold_df, pred_df, scenario='all_documents', label_map=None, eval_mode='discovery'):
+def evaluate(gold_df, pred_df, scenario='end_to_end', label_map=None, eval_mode='discovery'):
     """
     Evaluate causal extraction performance.
-    
+
     Args:
         gold_df, pred_df: Pandas DataFrames with gold and prediction data.
-        scenario: Evaluation scenario ('all_documents' or 'filtered_causal').
+        scenario: Evaluation scenario ('end_to_end' or 'filtered_causal').
         label_map: Optional mapping for normalizing relation labels.
         eval_mode (str): Mode for Task 2/3 evaluation.
                          'discovery' (default): Ignores extra overlapping items.
@@ -303,12 +303,12 @@ def display_results(results, title_prefix=""):
 #     pred_df = pd.read_csv(r"C:\\Users\\norouzin\\Desktop\\JointLearning\\predictions\\expert_bert_softmax_cls+span_doccano.csv")
 
 #     print("\n" + "#" * 15 + " Running in 'discovery' mode (ignoring extra overlaps) " + "#" * 15)
-#     results_discovery = evaluate(gold_df, pred_df, scenario='all_documents', eval_mode='discovery')
-#     display_results(results_discovery, title_prefix="All Documents - 'discovery' mode")
+#     results_discovery = evaluate(gold_df, pred_df, scenario='end_to_end', eval_mode='discovery')
+#     display_results(results_discovery, title_prefix="End-to-End - 'discovery' mode")
 
 #     print("\n" + "#" * 15 + " Running in 'coverage' mode (all overlaps are TPs) " + "#" * 15)
-#     results_coverage = evaluate(gold_df, pred_df, scenario='all_documents', eval_mode='coverage')
-#     display_results(results_coverage, title_prefix="All Documents - 'coverage' mode")
+#     results_coverage = evaluate(gold_df, pred_df, scenario='end_to_end', eval_mode='coverage')
+#     display_results(results_coverage, title_prefix="End-to-End - 'coverage' mode")
 
 #     print("\n" + "#" * 15 + " Running in 'discovery' mode for Filtered Causal " + "#" * 15)
 #     results_scenario_b = evaluate(gold_df, pred_df, scenario='filtered_causal', eval_mode='discovery')

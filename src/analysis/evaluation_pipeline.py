@@ -20,7 +20,7 @@ Example
 ...     model_paths=models,
 ...     thresholds=[0.7, 0.8],
 ...     classification_modes=["cls+span", "span_only"],
-...     scenarios=["all_documents", "filtered_causal"],
+...     scenarios=["end_to_end", "filtered_causal"],
 ...     write_markdown=True,
 ... )
 
@@ -360,7 +360,7 @@ def _write_markdown_report(
 #         'bert-gce-softmax-freeze': r"C:\Users\norouzin\Desktop\JointLearning\src\jointlearning\expert_bert_GCE_Softmax_Freeze\expert_bert_GCE_Softmax_Freeze_model.pt"    },
 #         thresholds=[0.9],
 #         classification_modes=['cls+span', 'span_only'],
-#         scenarios=['all_documents', 'filtered_causal'],
+#         scenarios=['end_to_end', 'filtered_causal'],
 #         eval_modes=["coverage", "discovery"],
 #         test_data_path=r'C:\Users\norouzin\Desktop\JointLearning\datasets\expert_multi_task_data\test.csv',
 #         save_predictions_dir=r'C:\Users\norouzin\Desktop\JointLearning\src\analysis\predictions',

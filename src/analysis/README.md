@@ -12,7 +12,7 @@ Our methodology is grounded in two distinct **evaluation scenarios** so we can r
 
 ## Evaluation Scenarios: A Two-Pronged Approach
 
-### 1. `all_documents` Scenario — Assessing the Overall Pipeline  
+### 1. `end_to_end` Scenario — Assessing the Overall Pipeline  
 
 *Evaluates the entire test corpus (452 documents).*  
 The model must filter a mixed collection of texts, identify causal documents, and then extract spans and relations. The score therefore combines:
