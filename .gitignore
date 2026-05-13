@@ -20,3 +20,14 @@ src/jointlearning/expert_bert_GCE_weakSP
 reviewer_extra_analysis/sequential_learning/models/bio/separate_bio.pt
 reviewer_extra_analysis/sequential_learning/models/rel/separate_rel.pt
 reviewer_extra_analysis/sequential_learning/models/cls/separate_cls.pt
+# Ignore all model and models folders and their contents
+models/
+**/models/
+**/models/*
+**/model*
+# Ignore all volumes folders (if any)
+volumes/
+**/volumes/
+**/volumes/*
+# Ignore specific model files found
+src/jointlearning/expert_bert_softmax/hf_exper_bert_softmax/model.safetensors
