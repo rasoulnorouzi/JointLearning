@@ -31,3 +31,4 @@ volumes/
 **/volumes/*
 # Ignore specific model files found
 src/jointlearning/expert_bert_softmax/hf_exper_bert_softmax/model.safetensors
+src/jointlearning/expert_bert_softmax/expert_bert_softmax_model.pt
