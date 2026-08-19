@@ -2,7 +2,9 @@ from __future__ import annotations
 from typing import Dict, List, Optional
 import torch
 import torch.nn as nn
-from transformers import AutoModel, PreTrainedModel
+# remove, belongs old version: from transformers import AutoModel, PreTrainedMode
+from transformers import AutoConfig, AutoModel, PreTrainedModel
+
 from dataclasses import dataclass
 try:
     from .config import id2label_bio, id2label_rel, id2label_cls
@@ -85,7 +87,8 @@ class JointCausalModel(PreTrainedModel):
         super().__init__(config)
         self.config = config
 
-        self.enc = AutoModel.from_pretrained(config.encoder_name)
+        # remove, belongs old version self.enc = AutoModel.from_pretrained(config.encoder_name)
+        self.enc = AutoModel.from_config(AutoConfig.from_pretrained(config.encoder_name))
         self.hidden_size = self.enc.config.hidden_size
         self.dropout = nn.Dropout(config.dropout)
         self.layer_norm = nn.LayerNorm(self.hidden_size)
@@ -117,6 +120,8 @@ class JointCausalModel(PreTrainedModel):
             nn.Linear(self.hidden_size // 2, config.num_rel_labels),
         )
         self._init_new_layer_weights()
+        # for new version added the below piece
+        self.post_init()
 
     def get_config_dict(self) -> Dict:
         """Returns the model's configuration as a dictionary."""
@@ -269,8 +274,9 @@ class JointCausalModel(PreTrainedModel):
         # ------------------------------------------------------------------
         if tokenizer is None:
             from transformers import AutoTokenizer
-            tokenizer = AutoTokenizer.from_pretrained(self.encoder_name, use_fast=True)
-
+            # remove, belongs old version: tokenizer = AutoTokenizer.from_pretrained(self.encoder_name, use_fast=True)
+            tokenizer = AutoTokenizer.from_pretrained(self.config.encoder_name, use_fast=True)
+        
         device = next(self.parameters()).device
         to_dev = lambda d: {k: v.to(device) for k, v in d.items()}  # Move tensors to the model's device
 
@@ -404,16 +410,6 @@ class JointCausalModel(PreTrainedModel):
                     seen.add(key)
                     uniq.append(r)
             rels = uniq
-
-            # If valid cause-effect spans are found but no relations extracted,
-            # mark as non-causal and remove spans
-            if cause_spans and effect_spans and not rels:
-                is_causal = False
-                spans = []  # Clear spans when no valid relations found
-
-            # If initially causal but no relations found, mark as non-causal
-            if is_causal and not rels:
-                is_causal = False
 
             # If the sentence is predicted as non-causal, ensure no spans or relations are returned
             if not is_causal:
